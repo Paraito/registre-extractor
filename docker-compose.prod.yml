@@ -1,0 +1,55 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    restart: always
+    volumes:
+      - redis_data:/data
+    networks:
+      - registre_network
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      REDIS_HOST: redis
+    env_file:
+      - .env.production
+    depends_on:
+      - redis
+    networks:
+      - registre_network
+    command: node dist/api/index.js
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: always
+    deploy:
+      replicas: 20
+    environment:
+      NODE_ENV: production
+      REDIS_HOST: redis
+      HEADLESS: "true"
+    env_file:
+      - .env.production
+    depends_on:
+      - redis
+      - api
+    networks:
+      - registre_network
+    command: node dist/worker/index.js
+
+volumes:
+  redis_data:
+
+networks:
+  registre_network:
+    driver: bridge

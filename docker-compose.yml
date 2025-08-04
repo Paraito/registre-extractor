@@ -1,0 +1,481 @@
+version: '3.8'
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test:
+        - CMD
+        - redis-cli
+        - ping
+      interval: 10s
+      timeout: 5s
+      retries: 5
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    restart: unless-stopped
+    ports:
+      - '3000:3000'
+    environment:
+      - NODE_ENV=production
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    env_file:
+      - .env
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./downloads:/app/downloads
+    command:
+      - node
+      - dist/api/index.js
+  worker-1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - WORKER_ID=worker-1
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    env_file:
+      - .env
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./downloads/worker-1:/app/downloads
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1G
+  worker-2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - WORKER_ID=worker-2
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    env_file:
+      - .env
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./downloads/worker-2:/app/downloads
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1G
+  worker-3:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - WORKER_ID=worker-3
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    env_file:
+      - .env
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./downloads/worker-3:/app/downloads
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1G
+  worker-4:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - WORKER_ID=worker-4
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    env_file:
+      - .env
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./downloads/worker-4:/app/downloads
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1G
+  worker-5:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - WORKER_ID=worker-5
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    env_file:
+      - .env
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./downloads/worker-5:/app/downloads
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1G
+  worker-6:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - WORKER_ID=worker-6
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    env_file:
+      - .env
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./downloads/worker-6:/app/downloads
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1G
+  worker-7:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - WORKER_ID=worker-7
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    env_file:
+      - .env
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./downloads/worker-7:/app/downloads
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1G
+  worker-8:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - WORKER_ID=worker-8
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    env_file:
+      - .env
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./downloads/worker-8:/app/downloads
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1G
+  worker-9:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - WORKER_ID=worker-9
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    env_file:
+      - .env
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./downloads/worker-9:/app/downloads
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1G
+  worker-10:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - WORKER_ID=worker-10
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    env_file:
+      - .env
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./downloads/worker-10:/app/downloads
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1G
+  worker-11:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - WORKER_ID=worker-11
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    env_file:
+      - .env
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./downloads/worker-11:/app/downloads
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1G
+  worker-12:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - WORKER_ID=worker-12
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    env_file:
+      - .env
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./downloads/worker-12:/app/downloads
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1G
+  worker-13:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - WORKER_ID=worker-13
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    env_file:
+      - .env
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./downloads/worker-13:/app/downloads
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1G
+  worker-14:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - WORKER_ID=worker-14
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    env_file:
+      - .env
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./downloads/worker-14:/app/downloads
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1G
+  worker-15:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - WORKER_ID=worker-15
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    env_file:
+      - .env
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./downloads/worker-15:/app/downloads
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1G
+  worker-16:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - WORKER_ID=worker-16
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    env_file:
+      - .env
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./downloads/worker-16:/app/downloads
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1G
+  worker-17:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - WORKER_ID=worker-17
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    env_file:
+      - .env
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./downloads/worker-17:/app/downloads
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1G
+  worker-18:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - WORKER_ID=worker-18
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    env_file:
+      - .env
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./downloads/worker-18:/app/downloads
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1G
+  worker-19:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - WORKER_ID=worker-19
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    env_file:
+      - .env
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./downloads/worker-19:/app/downloads
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1G
+  worker-20:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - WORKER_ID=worker-20
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    env_file:
+      - .env
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./downloads/worker-20:/app/downloads
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1G
+volumes:
+  redis_data: ~
