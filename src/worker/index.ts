@@ -4,7 +4,6 @@ import { logger } from '../utils/logger';
 import { config } from '../config';
 import { ExtractionQueueJob, WorkerAccount, WorkerStatus } from '../types';
 import { v4 as uuidv4 } from 'uuid';
-import path from 'path';
 import fs from 'fs/promises';
 import { convertToExtractionConfig } from '../queue/manager';
 

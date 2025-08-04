@@ -112,15 +112,8 @@ export class AIRegistreExtractor {
         logger.error({ errorText }, 'Data validation error detected');
         
         // Take a screenshot for debugging
-        const screenshotPath = await this.takeDebugScreenshot('data-validation-error');
+        await this.takeDebugScreenshot('data-validation-error');
         
-        // Determine the type of error based on the message
-        let errorType = 'unknown';
-        if (errorText?.includes('document demandé est inexistant')) {
-          errorType = 'document_not_found';
-        } else if (errorText?.includes('fiche immobilière demandée est inexistante')) {
-          errorType = 'property_record_not_found';
-        }
         
         // Throw a DataValidationError with details
         throw new DataValidationError(
@@ -925,8 +918,6 @@ export class AIRegistreExtractor {
     // First ensure save button exists and get the correct frame
     const targetFrame = await this.waitForSaveButton(this.page);
     
-    // Variable to hold download promise
-    let downloadPromise: Promise<any> | null = null;
     
     // Click the save button in the correct frame
     const result = await this.findAndClickSaveButton(targetFrame);
@@ -1010,7 +1001,7 @@ export class AIRegistreExtractor {
         targetFrame = initialFrame;
         break;
       } catch (e) {
-        logger.debug({ selector, error: e.message }, 'Selector failed in main page');
+        logger.debug({ selector, error: e instanceof Error ? e.message : String(e) }, 'Selector failed in main page');
         // Continue trying next selector
       }
     }
@@ -1027,7 +1018,7 @@ export class AIRegistreExtractor {
           targetFrame = menuFrame;
           break;
         } catch (e) {
-          logger.debug({ selector, error: e.message }, 'Selector failed in menu frame');
+          logger.debug({ selector, error: e instanceof Error ? e.message : String(e) }, 'Selector failed in menu frame');
         }
       }
     }
@@ -1070,6 +1061,7 @@ export class AIRegistreExtractor {
           }
         `;
         
+        // @ts-ignore - waitForQueryState might not be in the type definition
         await this.agentQLPage!.waitForQueryState(query, { timeout: 30000 });
         targetFrame = initialFrame; // Use main page for AI
       } catch (error) {
