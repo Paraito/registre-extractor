@@ -283,7 +283,39 @@ export class ExtractionWorker {
         workerId: this.workerId 
       }, 'Job processing failed');
       
-      // Update job as failed
+      // Check if this is a worker/browser availability issue
+      const isWorkerUnavailable = error instanceof Error && (
+        error.message.includes('not initialized') ||
+        error.message.includes('browser') ||
+        error.message.includes('closed') ||
+        error.message.includes('Target closed') ||
+        error.message.includes('Connection closed') ||
+        error.message.includes('Protocol error')
+      );
+      
+      if (isWorkerUnavailable) {
+        // Worker/browser issue - release the job back to queue without marking as error
+        logger.warn({ 
+          jobId: job.id, 
+          workerId: this.workerId 
+        }, 'Worker unavailable, releasing job back to queue');
+        
+        await supabase
+          .from('extraction_queue')
+          .update({
+            status: 'En attente',
+            worker_id: null,
+            processing_started_at: null,
+            // Keep the error message for debugging but don't increment attempts
+            error_message: `Worker unavailable: ${error instanceof Error ? error.message : 'Unknown error'}`
+          })
+          .eq('id', job.id);
+          
+        // Don't count this as a failed job
+        return;
+      }
+      
+      // For actual extraction errors, use the retry logic
       const attempts = (job.attemtps || 0) + 1;
       const maxAttempts = job.max_attempts || 3;
       
@@ -348,10 +380,27 @@ export class ExtractionWorker {
     
     this.shouldStop = true;
     
-    // Wait for current job to finish
-    while (this.isProcessing) {
-      await new Promise(resolve => setTimeout(resolve, 1000));
+    // If currently processing a job, release it back to queue
+    if (this.isProcessing && this.workerStatus.current_job_id) {
+      logger.info({ 
+        jobId: this.workerStatus.current_job_id,
+        workerId: this.workerId 
+      }, 'Releasing current job back to queue due to shutdown');
+      
+      await supabase
+        .from('extraction_queue')
+        .update({
+          status: 'En attente',
+          worker_id: null,
+          processing_started_at: null,
+          error_message: 'Worker shutdown - job released'
+        })
+        .eq('id', this.workerStatus.current_job_id)
+        .eq('worker_id', this.workerId); // Only update if we still own it
     }
+    
+    // Wait a moment for the update to complete
+    await new Promise(resolve => setTimeout(resolve, 1000));
     
     // Stop heartbeat
     if (this.heartbeatInterval) {
