@@ -15,6 +15,8 @@ export class ExtractionWorker {
   private currentAccount: WorkerAccount | null = null;
   private isProcessing: boolean = false;
   private shouldStop: boolean = false;
+  private lastJobTime: number = Date.now();
+  private idleTimeoutMs: number = 2 * 60 * 1000; // 2 minutes of idle time before closing browser
 
   constructor(workerId?: string) {
     this.workerId = workerId || `worker-${uuidv4()}`;
@@ -37,21 +39,13 @@ export class ExtractionWorker {
       // Start heartbeat
       this.startHeartbeat();
       
-      // Get an account and initialize extractor
+      // Get an account
       this.currentAccount = await this.getAvailableAccount();
       this.workerStatus.account_id = this.currentAccount.id;
       
-      // Initialize extractor with account
-      this.extractor = new RegistreExtractor(
-        this.currentAccount,
-        this.workerId,
-        config.isProduction
-      );
-      
-      await this.extractor.initialize();
-      await this.extractor.login();
-      
-      logger.info({ workerId: this.workerId }, 'Worker initialized and logged in');
+      // Don't initialize extractor here - do it on demand
+      logger.info({ workerId: this.workerId, account: this.currentAccount.username }, 
+        'Worker registered and ready');
       
       // Start continuous job processing
       this.processContinuously();
@@ -59,6 +53,39 @@ export class ExtractionWorker {
     } catch (error) {
       logger.error({ error, workerId: this.workerId }, 'Failed to initialize worker');
       throw error;
+    }
+  }
+  
+  private async initializeExtractor(): Promise<void> {
+    if (!this.currentAccount) {
+      throw new Error('No account available');
+    }
+    
+    logger.info({ workerId: this.workerId }, 'Initializing extractor and browser');
+    
+    // Initialize extractor with account
+    this.extractor = new RegistreExtractor(
+      this.currentAccount,
+      this.workerId,
+      config.isProduction
+    );
+    
+    await this.extractor.initialize();
+    await this.extractor.login();
+    
+    logger.info({ workerId: this.workerId, account: this.currentAccount.username }, 
+      'Extractor initialized and logged in');
+  }
+  
+  private async closeExtractor(): Promise<void> {
+    if (this.extractor) {
+      logger.info({ workerId: this.workerId }, 'Closing extractor and browser');
+      try {
+        await this.extractor.close();
+      } catch (error) {
+        logger.error({ error, workerId: this.workerId }, 'Error closing extractor');
+      }
+      this.extractor = null;
     }
   }
 
@@ -128,16 +155,46 @@ export class ExtractionWorker {
         const job = await this.getNextJob();
         
         if (!job) {
+          // Check if we've been idle too long
+          const idleTime = Date.now() - this.lastJobTime;
+          
+          if (idleTime > this.idleTimeoutMs && this.extractor) {
+            logger.info({ 
+              workerId: this.workerId,
+              idleMinutes: Math.round(idleTime / 60000)
+            }, 'Worker idle timeout - closing browser to prevent session timeout');
+            
+            // Close the browser and clean up
+            await this.closeExtractor();
+          }
+          
           // No jobs available, wait a bit
           await new Promise(resolve => setTimeout(resolve, 5000));
           continue;
         }
+        
+        // Ensure extractor is initialized before processing
+        if (!this.extractor) {
+          await this.initializeExtractor();
+        }
+        
+        // Update last job time
+        this.lastJobTime = Date.now();
         
         // Process the job
         await this.processJob(job);
         
       } catch (error) {
         logger.error({ error, workerId: this.workerId }, 'Error in continuous processing');
+        
+        // If it's a browser/connection error, close and reinitialize
+        if (error instanceof Error && 
+            (error.message.includes('browser') || 
+             error.message.includes('closed') ||
+             error.message.includes('Target closed'))) {
+          await this.closeExtractor();
+        }
+        
         await new Promise(resolve => setTimeout(resolve, 10000));
       }
     }
@@ -407,10 +464,8 @@ export class ExtractionWorker {
       clearInterval(this.heartbeatInterval);
     }
 
-    // Close extractor
-    if (this.extractor) {
-      await this.extractor.close();
-    }
+    // Close extractor using our helper method
+    await this.closeExtractor();
 
     // Update worker status
     await supabase
