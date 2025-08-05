@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "tsx watch src/worker/index.ts",
     "dev:v2": "tsx watch src/worker/worker-v2.ts",
-    "build": "tsc",
+    "build": "tsc && cp src/api/dashboard.html dist/api/",
     "start": "node dist/worker/index.js",
     "start:v2": "node dist/worker/worker-v2.js",
     "api:dev": "tsx watch src/api/index.ts",
