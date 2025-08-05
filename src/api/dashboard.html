@@ -98,67 +98,41 @@
         .status-badge {
             display: inline-block;
             padding: 4px 12px;
-            border-radius: 20px;
-            font-size: 12px;
-            font-weight: 500;
-        }
-        
-        .status-idle { background-color: #e3f2fd; color: #1976d2; }
-        .status-busy { background-color: #fff3e0; color: #f57c00; }
-        .status-error { background-color: #ffebee; color: #d32f2f; }
-        .status-offline { background-color: #efebe9; color: #5d4037; }
-        .status-en-attente { background-color: #e3f2fd; color: #1976d2; }
-        .status-en-traitement { background-color: #fff3e0; color: #f57c00; }
-        .status-complété { background-color: #e8f5e9; color: #388e3c; }
-        .status-erreur { background-color: #ffebee; color: #d32f2f; }
-        
-        .doc-type-badge {
-            display: inline-block;
-            padding: 4px 8px;
             border-radius: 4px;
             font-size: 12px;
-            font-weight: 500;
+            font-weight: 600;
+            text-transform: uppercase;
         }
         
-        .doc-type-index { background-color: #e3f2fd; color: #1976d2; }
-        .doc-type-acte { background-color: #fce4ec; color: #c2185b; }
-        .doc-type-plan-cadastraux { background-color: #e8f5e9; color: #388e3c; }
+        .status-idle { background: #e3f2fd; color: #1976d2; }
+        .status-busy { background: #fff3e0; color: #f57c00; }
+        .status-error { background: #ffebee; color: #d32f2f; }
+        .status-offline { background: #eceff1; color: #616161; }
         
-        .refresh-button {
-            background-color: #3498db;
-            color: white;
-            border: none;
-            padding: 10px 20px;
-            border-radius: 5px;
-            cursor: pointer;
-            font-size: 14px;
-            margin-bottom: 20px;
-        }
-        
-        .refresh-button:hover {
-            background-color: #2980b9;
-        }
+        .status-En.attente { background: #e8f5e9; color: #388e3c; }
+        .status-En.traitement { background: #fff3e0; color: #f57c00; }
+        .status-Complété, .status-Terminé { background: #e3f2fd; color: #1976d2; }
+        .status-Erreur { background: #ffebee; color: #d32f2f; }
         
         .last-updated {
-            text-align: right;
+            text-align: center;
             color: #666;
-            font-size: 12px;
-            margin-top: 10px;
+            margin-top: 20px;
+            font-size: 14px;
         }
         
-        .progress-bar {
-            width: 100%;
-            height: 20px;
-            background-color: #f0f0f0;
-            border-radius: 10px;
-            overflow: hidden;
-            margin-top: 10px;
+        .error-message {
+            background: #ffebee;
+            color: #d32f2f;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+            display: none;
         }
         
-        .progress-fill {
-            height: 100%;
-            background-color: #27ae60;
-            transition: width 0.3s ease;
+        .loading {
+            color: #666;
+            font-style: italic;
         }
     </style>
 </head>
@@ -168,31 +142,31 @@
     </header>
     
     <div class="container">
-        <button class="refresh-button" onclick="refreshData()">Refresh Data</button>
+        <div class="error-message" id="error-message"></div>
         
-        <div class="metrics-grid" id="metrics">
+        <div class="metrics-grid">
             <div class="metric-card">
-                <div class="metric-label">Queue - En attente</div>
+                <div class="metric-label">Jobs En Attente</div>
                 <div class="metric-value" id="queue-waiting">-</div>
             </div>
             <div class="metric-card">
-                <div class="metric-label">Queue - En traitement</div>
+                <div class="metric-label">Jobs En Traitement</div>
                 <div class="metric-value" id="queue-active">-</div>
             </div>
             <div class="metric-card">
-                <div class="metric-label">Queue - Complété</div>
+                <div class="metric-label">Jobs Terminés</div>
                 <div class="metric-value" id="queue-completed">-</div>
             </div>
             <div class="metric-card">
-                <div class="metric-label">Queue - Erreur</div>
+                <div class="metric-label">Jobs En Erreur</div>
                 <div class="metric-value" id="queue-failed">-</div>
             </div>
             <div class="metric-card">
-                <div class="metric-label">Workers - Active</div>
+                <div class="metric-label">Workers Actifs</div>
                 <div class="metric-value" id="workers-active">-</div>
             </div>
             <div class="metric-card">
-                <div class="metric-label">Workers - Total</div>
+                <div class="metric-label">Workers Total</div>
                 <div class="metric-value" id="workers-total">-</div>
             </div>
         </div>
@@ -212,7 +186,7 @@
                         </tr>
                     </thead>
                     <tbody id="workers-tbody">
-                        <tr><td colspan="6">Loading...</td></tr>
+                        <tr><td colspan="6" class="loading">Loading...</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -225,15 +199,14 @@
                             <th>Job ID</th>
                             <th>Source</th>
                             <th>Document #</th>
-                            <th>Circonscription</th>
                             <th>Status</th>
-                            <th>Started</th>
+                            <th>Worker</th>
                             <th>Created</th>
                             <th>Actions</th>
                         </tr>
                     </thead>
                     <tbody id="jobs-tbody">
-                        <tr><td colspan="8">Loading...</td></tr>
+                        <tr><td colspan="7" class="loading">Loading...</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -246,74 +219,104 @@
     
     <script>
         const API_BASE_URL = window.location.origin;
+        let updateInterval;
+        
+        function showError(message) {
+            const errorEl = document.getElementById('error-message');
+            errorEl.textContent = message;
+            errorEl.style.display = 'block';
+            setTimeout(() => {
+                errorEl.style.display = 'none';
+            }, 5000);
+        }
         
         async function fetchMetrics() {
             try {
                 const response = await fetch(`${API_BASE_URL}/api/metrics`);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 const data = await response.json();
                 
-                // Update queue metrics - map to French status names
-                document.getElementById('queue-waiting').textContent = data.queue.waiting || 0;
-                document.getElementById('queue-active').textContent = data.queue.active || 0;
-                document.getElementById('queue-completed').textContent = data.queue.completed || 0;
-                document.getElementById('queue-failed').textContent = data.queue.failed || 0;
+                // Update queue metrics
+                document.getElementById('queue-waiting').textContent = data.queue?.waiting || 0;
+                document.getElementById('queue-active').textContent = data.queue?.active || 0;
+                document.getElementById('queue-completed').textContent = data.queue?.completed || 0;
+                document.getElementById('queue-failed').textContent = data.queue?.failed || 0;
                 
                 // Update worker metrics
-                document.getElementById('workers-active').textContent = data.workers.active;
-                document.getElementById('workers-total').textContent = data.workers.total;
+                document.getElementById('workers-active').textContent = data.workers?.active || 0;
+                document.getElementById('workers-total').textContent = data.workers?.total || 0;
             } catch (error) {
                 console.error('Failed to fetch metrics:', error);
+                // Don't show error for metrics, just show 0
             }
         }
         
         async function fetchWorkers() {
             try {
                 const response = await fetch(`${API_BASE_URL}/api/workers`);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 const data = await response.json();
                 
                 const tbody = document.getElementById('workers-tbody');
                 tbody.innerHTML = '';
                 
+                if (!data.workers || data.workers.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="6">No workers found</td></tr>';
+                    return;
+                }
+                
                 data.workers.forEach(worker => {
                     const row = tbody.insertRow();
+                    const shortId = worker.worker_id.substring(0, 8) + '...';
+                    const heartbeatTime = new Date(worker.last_heartbeat);
+                    const isStale = (Date.now() - heartbeatTime) > 60000; // 1 minute
+                    
                     row.innerHTML = `
-                        <td>${worker.worker_id}</td>
+                        <td title="${worker.worker_id}">${shortId}</td>
                         <td><span class="status-badge status-${worker.status}">${worker.status}</span></td>
-                        <td>${worker.current_job_id || '-'}</td>
-                        <td>${worker.jobs_completed}</td>
-                        <td>${worker.jobs_failed}</td>
-                        <td>${new Date(worker.last_heartbeat).toLocaleTimeString()}</td>
+                        <td>${worker.current_job_id ? worker.current_job_id.substring(0, 8) + '...' : '-'}</td>
+                        <td>${worker.jobs_completed || 0}</td>
+                        <td>${worker.jobs_failed || 0}</td>
+                        <td style="${isStale ? 'color: #d32f2f;' : ''}">${heartbeatTime.toLocaleTimeString()}</td>
                     `;
                 });
             } catch (error) {
                 console.error('Failed to fetch workers:', error);
+                document.getElementById('workers-tbody').innerHTML = 
+                    '<tr><td colspan="6">Error loading workers</td></tr>';
             }
         }
         
         async function fetchJobs() {
             try {
                 const response = await fetch(`${API_BASE_URL}/api/extractions?limit=20`);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 const data = await response.json();
                 
                 const tbody = document.getElementById('jobs-tbody');
                 tbody.innerHTML = '';
                 
+                if (!data.jobs || data.jobs.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="7">No jobs found</td></tr>';
+                    return;
+                }
+                
                 data.jobs.forEach(job => {
                     const row = tbody.insertRow();
-                    const statusClass = job.status ? job.status.toLowerCase().replace(/\s+/g, '-') : 'unknown';
-                    const docTypeClass = job.document_source ? job.document_source.replace(/_/g, '-') : 'unknown';
+                    const shortId = job.extraction_id.substring(0, 8) + '...';
+                    const workerId = job.worker_id ? job.worker_id.substring(0, 8) + '...' : '-';
+                    const createdAt = new Date(job.created_at);
                     
                     row.innerHTML = `
-                        <td>${job.extraction_id.substring(0, 8)}...</td>
-                        <td><span class="doc-type-badge doc-type-${docTypeClass}">${job.document_source || '-'}</span></td>
-                        <td>${job.document_number || '-'}</td>
-                        <td>${job.circonscription_fonciere || '-'}</td>
-                        <td><span class="status-badge status-${statusClass}">${job.status || '-'}</span></td>
-                        <td>${job.processing_started_at ? new Date(job.processing_started_at).toLocaleTimeString() : '-'}</td>
-                        <td>${new Date(job.created_at).toLocaleTimeString()}</td>
+                        <td title="${job.extraction_id}">${shortId}</td>
+                        <td>${job.document_source}</td>
+                        <td>${job.document_number}</td>
+                        <td><span class="status-badge status-${job.status.replace(' ', '.')}">${job.status}</span></td>
+                        <td>${workerId}</td>
+                        <td>${createdAt.toLocaleString()}</td>
                         <td>
                             ${job.status === 'Erreur' ? 
-                                `<button onclick="retryJob('${job.extraction_id}')" style="padding: 4px 8px; font-size: 12px;">Retry</button>` : 
+                                `<button onclick="retryJob('${job.extraction_id}')">Retry</button>` : 
                                 '-'
                             }
                         </td>
@@ -321,39 +324,44 @@
                 });
             } catch (error) {
                 console.error('Failed to fetch jobs:', error);
+                document.getElementById('jobs-tbody').innerHTML = 
+                    '<tr><td colspan="7">Error loading jobs</td></tr>';
             }
         }
         
         async function retryJob(jobId) {
             try {
-                await fetch(`${API_BASE_URL}/api/extractions/${jobId}/retry`, {
+                const response = await fetch(`${API_BASE_URL}/api/extractions/${jobId}/retry`, {
                     method: 'POST'
                 });
-                refreshData();
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                await updateDashboard();
             } catch (error) {
-                console.error('Failed to retry job:', error);
+                showError(`Failed to retry job: ${error.message}`);
             }
         }
         
-        function updateLastUpdated() {
-            document.getElementById('last-updated').textContent = 
-                `Last updated: ${new Date().toLocaleTimeString()}`;
-        }
-        
-        async function refreshData() {
+        async function updateDashboard() {
             await Promise.all([
                 fetchMetrics(),
                 fetchWorkers(),
                 fetchJobs()
             ]);
-            updateLastUpdated();
+            
+            document.getElementById('last-updated').textContent = 
+                `Last updated: ${new Date().toLocaleTimeString()}`;
         }
         
         // Initial load
-        refreshData();
+        updateDashboard();
         
         // Auto-refresh every 5 seconds
-        setInterval(refreshData, 5000);
+        updateInterval = setInterval(updateDashboard, 5000);
+        
+        // Clean up on page unload
+        window.addEventListener('beforeunload', () => {
+            if (updateInterval) clearInterval(updateInterval);
+        });
     </script>
 </body>
 </html>

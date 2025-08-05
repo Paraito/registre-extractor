@@ -233,18 +233,19 @@ export class QueueManager {
   }
 
   async getQueueMetrics() {
+    // Get counts directly from Supabase
     const [waiting, active, completed, failed] = await Promise.all([
-      this.queue.getWaitingCount(),
-      this.queue.getActiveCount(),
-      this.queue.getCompletedCount(),
-      this.queue.getFailedCount(),
+      supabase.from('extraction_queue').select('id', { count: 'exact', head: true }).eq('status', 'En attente'),
+      supabase.from('extraction_queue').select('id', { count: 'exact', head: true }).eq('status', 'En traitement'),
+      supabase.from('extraction_queue').select('id', { count: 'exact', head: true }).eq('status', 'Terminé'),
+      supabase.from('extraction_queue').select('id', { count: 'exact', head: true }).eq('status', 'Erreur'),
     ]);
-
+    
     return {
-      waiting,
-      active,
-      completed,
-      failed,
+      waiting: waiting.count || 0,
+      active: active.count || 0,
+      completed: completed.count || 0,
+      failed: failed.count || 0,
     };
   }
 
