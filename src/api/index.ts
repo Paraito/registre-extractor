@@ -4,6 +4,7 @@ import { logger } from '../utils/logger';
 import { config } from '../config';
 import { z } from 'zod';
 import path from 'path';
+import { supabase } from '../utils/supabase';
 
 const app = express();
 const queueManager = new QueueManager();
@@ -210,21 +211,39 @@ app.get('/api/metrics', async (_req: Request, res: Response, next: NextFunction)
   }
 });
 
-// Get worker status
+// Get worker status with account info
 app.get('/api/workers', async (_req: Request, res: Response, next: NextFunction) => {
   try {
     const workers = await queueManager.getWorkerMetrics();
     
+    // Get account info for workers
+    const workerIds = workers.map((w: any) => w.account_id).filter(Boolean);
+    let accounts: any[] = [];
+    
+    if (workerIds.length > 0) {
+      const { data } = await supabase
+        .from('worker_accounts')
+        .select('id, username')
+        .in('id', workerIds);
+      accounts = data || [];
+    }
+    
     res.json({
-      workers: workers.map((w: any) => ({
-        worker_id: w.worker_id,
-        status: w.status,
-        current_job_id: w.current_job_id,
-        last_heartbeat: w.last_heartbeat,
-        jobs_completed: w.jobs_completed,
-        jobs_failed: w.jobs_failed,
-        uptime: Date.now() - new Date(w.started_at).getTime(),
-      })),
+      workers: workers.map((w: any) => {
+        const account = accounts.find(a => a.id === w.account_id);
+        return {
+          worker_id: w.worker_id,
+          status: w.status,
+          current_job_id: w.current_job_id,
+          last_heartbeat: w.last_heartbeat,
+          jobs_completed: w.jobs_completed,
+          jobs_failed: w.jobs_failed,
+          started_at: w.started_at,
+          account_id: w.account_id,
+          account_username: account?.username,
+          uptime: Date.now() - new Date(w.started_at).getTime(),
+        };
+      }),
     });
   } catch (error) {
     next(error);

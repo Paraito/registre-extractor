@@ -237,7 +237,7 @@ export class QueueManager {
     const [waiting, active, completed, failed] = await Promise.all([
       supabase.from('extraction_queue').select('id', { count: 'exact', head: true }).eq('status', 'En attente'),
       supabase.from('extraction_queue').select('id', { count: 'exact', head: true }).eq('status', 'En traitement'),
-      supabase.from('extraction_queue').select('id', { count: 'exact', head: true }).eq('status', 'Terminé'),
+      supabase.from('extraction_queue').select('id', { count: 'exact', head: true }).eq('status', 'Complété'),
       supabase.from('extraction_queue').select('id', { count: 'exact', head: true }).eq('status', 'Erreur'),
     ]);
     
