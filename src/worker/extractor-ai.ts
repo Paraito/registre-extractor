@@ -1139,7 +1139,7 @@ export class AIRegistreExtractor {
           paperDocumentImages(description: "images with src containing 'BPD.GIF' indicating paper documents")
         }`;
         
-        const { radioButtons, submitButton, paperDocumentImages } = await this.queryWithAI(radioQuery, 'actes-document-selection');
+        const { radioButtons, submitButton } = await this.queryWithAI(radioQuery, 'actes-document-selection');
         
         if (radioButtons && radioButtons.length > 0) {
           logger.info({ count: radioButtons.length }, 'Found radio buttons using AI');
