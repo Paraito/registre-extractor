@@ -108,6 +108,14 @@ export class AIRegistreExtractor {
           return; // Exit without throwing error
         }
         
+        // For actes, check if this is the "similar documents" case - don't throw error, return to continue
+        if (documentType === 'actes' && errorText?.includes('Nous vous proposons une liste de document(s) dont le numéro est semblable')) {
+          logger.info({ errorText }, 'Similar documents found for actes - will handle document selection');
+          // Take a screenshot for debugging
+          await this.takeDebugScreenshot('actes-similar-documents');
+          return; // Exit without throwing error - let the flow continue to document selection
+        }
+        
         // For all other cases, treat as error
         logger.error({ errorText }, 'Data validation error detected');
         
@@ -696,6 +704,9 @@ export class AIRegistreExtractor {
       // Check for validation errors after form submission
       await this.checkForDataValidationErrors('actes');
       
+      // NEW: Handle document selection if similar documents are found
+      await this.handleActeDocumentSelection();
+      
       // Wait for document load and download - same as index
       return await this.waitForDocumentAndDownload(config);
     } catch (error) {
@@ -826,6 +837,9 @@ export class AIRegistreExtractor {
       // Check for validation errors after form submission
       await this.checkForDataValidationErrors('plans_cadastraux');
       
+      // NEW: Handle the missing intermediate steps for plans cadastraux
+      await this.handlePlansCadastrauxIntermediateSteps();
+      
       // For plans cadastraux, check if radio button selection is needed
       await this.checkAndSelectLatestRadioOption();
       
@@ -839,6 +853,448 @@ export class AIRegistreExtractor {
       }, 'Plans Cadastraux extraction failed');
       
       throw error;
+    }
+  }
+
+  /**
+   * Handle the missing intermediate steps specific to plans cadastraux extraction
+   * Step 2: Document selection page (if present)
+   * Step 3: Confirmation page (if present)
+   */
+  private async handlePlansCadastrauxIntermediateSteps(): Promise<void> {
+    if (!this.page) throw new Error('Page not initialized');
+
+    logger.info('🔍 Checking for plans cadastraux intermediate steps');
+    
+    // Wait a moment for page to load after form submission
+    await this.page.waitForTimeout(3000);
+    await this.page.waitForLoadState('networkidle', { timeout: 15000 });
+    
+    const currentUrl = this.page.url();
+    logger.info({ currentUrl }, '📍 Current URL after form submission');
+    
+    // Take a screenshot to see what page we're on
+    await this.takeDebugScreenshot('plans-cadastraux-after-form-submission');
+
+    // Step 2: Handle document selection page 
+    // URL: https://www.registrefoncier.gouv.qc.ca/Sirf/Script/13_01_08/pf_13_01_08_selct_plan_cadst.asp
+    if (currentUrl.includes('pf_13_01_08_selct_plan_cadst') || currentUrl.includes('selct_plan_cadst')) {
+      logger.info('Document selection page detected - Step 2');
+      await this.takeDebugScreenshot('plans-cadastraux-step2-document-selection');
+      
+      // Look for document selection options (radio buttons, checkboxes, or links)
+      let documentSelected = false;
+      
+      // Try different selection methods
+      const selectionMethods = [
+        // Method 1: Radio buttons (most common)
+        async () => {
+          const radioButtons = await this.page!.$$('input[type="radio"]');
+          if (radioButtons && radioButtons.length > 0) {
+            logger.info({ count: radioButtons.length }, 'Found radio buttons for document selection');
+            // Select the first or most appropriate option
+            await radioButtons[0].click();
+            logger.info('Selected first radio button option');
+            return true;
+          }
+          return false;
+        },
+        
+        // Method 2: Checkboxes
+        async () => {
+          const checkboxes = await this.page!.$$('input[type="checkbox"]');
+          if (checkboxes && checkboxes.length > 0) {
+            logger.info({ count: checkboxes.length }, 'Found checkboxes for document selection');
+            await checkboxes[0].click();
+            logger.info('Selected first checkbox option');
+            return true;
+          }
+          return false;
+        },
+        
+        // Method 3: Links or buttons with document-related text
+        async () => {
+          const docLinks = await this.page!.$$('a, button');
+          for (const link of docLinks) {
+            const text = await link.textContent();
+            if (text && (text.includes('Plan') || text.includes('Document') || text.includes('Sélectionner'))) {
+              logger.info({ linkText: text }, 'Found document selection link');
+              await link.click();
+              return true;
+            }
+          }
+          return false;
+        },
+        
+        // Method 4: AI-based selection
+        async () => {
+          try {
+            const selectionQuery = `{
+              documentOption(description: "Option to select a document, plan, or cadastral item")
+              selectButton(description: "Button or link to select a document")
+            }`;
+            
+            const { documentOption, selectButton } = await this.queryWithAI(selectionQuery, 'document-selection');
+            
+            if (documentOption) {
+              await documentOption.click();
+              logger.info('Selected document using AI - documentOption');
+              return true;
+            } else if (selectButton) {
+              await selectButton.click();
+              logger.info('Selected document using AI - selectButton');
+              return true;
+            }
+          } catch (aiError) {
+            logger.warn({ error: aiError }, 'AI document selection failed');
+          }
+          return false;
+        }
+      ];
+      
+      // Try each selection method
+      for (const method of selectionMethods) {
+        try {
+          if (await method()) {
+            documentSelected = true;
+            break;
+          }
+        } catch (error) {
+          logger.warn({ error }, 'Document selection method failed, trying next');
+        }
+      }
+      
+      if (!documentSelected) {
+        logger.warn('No document selection method worked, continuing anyway');
+      }
+      
+      // Click Soumettre button after selection
+      logger.info('Looking for submit button on document selection page');
+      let submitClicked = false;
+      
+      // Try direct selector first
+      const submitSelectors = [
+        'input[type="submit"]',
+        'button[type="submit"]', 
+        'input[value*="Soumettre"]',
+        'button:has-text("Soumettre")',
+        'input[value*="Continuer"]',
+        'button:has-text("Continuer")'
+      ];
+      
+      for (const selector of submitSelectors) {
+        try {
+          const element = await this.page.$(selector);
+          if (element) {
+            await element.click();
+            submitClicked = true;
+            logger.info({ selector }, 'Clicked submit button on document selection page');
+            break;
+          }
+        } catch (e) {
+          // Continue trying other selectors
+        }
+      }
+      
+      if (!submitClicked) {
+        // Fallback to AI
+        try {
+          const submitQuery = `{
+            submitButton(description: "Submit button with text 'Soumettre', 'Continuer', or similar")
+          }`;
+          const { submitButton } = await this.queryWithAI(submitQuery, 'document-selection-submit');
+          if (submitButton) {
+            await submitButton.click();
+            submitClicked = true;
+            logger.info('Clicked submit button using AI on document selection page');
+          }
+        } catch (aiError) {
+          logger.warn('Could not find submit button on document selection page');
+        }
+      }
+      
+      if (submitClicked) {
+        // Wait for page to load after submission
+        await this.page.waitForTimeout(2000);
+        await this.page.waitForLoadState('networkidle', { timeout: 15000 });
+        logger.info('Document selection step completed');
+      }
+    }
+
+    // Step 3: Handle confirmation page
+    // URL: https://www.registrefoncier.gouv.qc.ca/Sirf/Script/13_01_13/pf_13_01_13_confr_demnd.asp
+    const updatedUrl = this.page.url();
+    logger.info({ updatedUrl }, 'Checking for confirmation page - Step 3');
+    
+    if (updatedUrl.includes('pf_13_01_13_confr_demnd') || updatedUrl.includes('confr_demnd')) {
+      logger.info('Confirmation page detected - Step 3');
+      await this.takeDebugScreenshot('plans-cadastraux-step3-confirmation');
+      
+      // Look for the specific Confirmer button
+      // <input class="BoutnStand" type="submit" id="btnConfr" name="btnConfr" accesskey="C" tabindex="11" value="Confirmer">
+      let confirmerClicked = false;
+      
+      const confirmerSelectors = [
+        '#btnConfr',                                    // Exact ID
+        'input[name="btnConfr"]',                      // By name
+        'input[value="Confirmer"]',                    // By value
+        'input.BoutnStand[value="Confirmer"]',         // By class and value
+        'input[type="submit"][value="Confirmer"]',     // By type and value
+        'input[type="submit"]:has-text("Confirmer")',  // Playwright text selector
+        'button:has-text("Confirmer")',                // Button alternative
+      ];
+      
+      // Try direct selectors first
+      for (const selector of confirmerSelectors) {
+        try {
+          const element = await this.page.$(selector);
+          if (element) {
+            await element.click();
+            confirmerClicked = true;
+            logger.info({ selector }, 'Clicked Confirmer button');
+            break;
+          }
+        } catch (e) {
+          logger.debug({ selector, error: e instanceof Error ? e.message : e }, 'Confirmer selector failed');
+        }
+      }
+      
+      if (!confirmerClicked) {
+        // Fallback to AI
+        try {
+          const confirmerQuery = `{
+            confirmerButton(description: "Button to confirm with text 'Confirmer' or similar")
+            confirmButton(description: "Confirmation button")
+          }`;
+          
+          const { confirmerButton, confirmButton } = await this.queryWithAI(confirmerQuery, 'confirmation-button');
+          
+          if (confirmerButton) {
+            await confirmerButton.click();
+            confirmerClicked = true;
+            logger.info('Clicked Confirmer button using AI');
+          } else if (confirmButton) {
+            await confirmButton.click();
+            confirmerClicked = true;
+            logger.info('Clicked confirm button using AI');
+          }
+        } catch (aiError) {
+          logger.warn({ error: aiError }, 'AI could not find Confirmer button');
+        }
+      }
+      
+      if (!confirmerClicked) {
+        logger.warn('Could not find or click Confirmer button, continuing anyway');
+      } else {
+        // Wait for page to load after confirmation
+        await this.page.waitForTimeout(2000);
+        await this.page.waitForLoadState('networkidle', { timeout: 15000 });
+        logger.info('Confirmation step completed');
+      }
+    }
+    
+    // Log final URL after all intermediate steps
+    const finalUrl = this.page.url();
+    logger.info({ finalUrl }, '✅ Completed plans cadastraux intermediate steps');
+    
+    // Take final screenshot to see where we ended up
+    await this.takeDebugScreenshot('plans-cadastraux-final-page-before-document-wait');
+  }
+
+  private async handleActeDocumentSelection(): Promise<void> {
+    if (!this.page) throw new Error('Page not initialized');
+    
+    logger.info('🔍 Checking for "Résultat de la recherche" section with similar documents for actes');
+    
+    try {
+      // Wait a bit to ensure the page has rendered after form submission
+      await this.page.waitForTimeout(3000);
+      await this.page.waitForLoadState('networkidle', { timeout: 10000 });
+      
+      // Take a screenshot to see the current state
+      await this.takeDebugScreenshot('actes-after-rechercher');
+      
+      // Look for the "Résultat de la recherche" section
+      // This appears as a new section under "Critères de recherche" when similar documents are found
+      const searchResultsSelector = 'table:has-text("Résultat de la recherche"), td:has-text("Résultat de la recherche")';
+      const searchResultsSection = await this.page.$(searchResultsSelector);
+      
+      if (!searchResultsSection) {
+        logger.info('No "Résultat de la recherche" section found - assuming direct document found');
+        return;
+      }
+      
+      logger.info('✅ Found "Résultat de la recherche" section - handling document selection');
+      
+      // Find the radio buttons for document selection
+      // Try multiple methods to find and select the most appropriate document
+      
+      let selectionMade = false;
+      
+      // Method 1: Use AI to find and select the most appropriate radio button, avoiding paper documents
+      try {
+        const radioQuery = `{
+          radioButtons(description: "radio buttons for document selection in search results")
+          submitButton(description: "button with text 'Soumettre' to submit the selection")
+          paperDocumentImages(description: "images with src containing 'BPD.GIF' indicating paper documents")
+        }`;
+        
+        const { radioButtons, submitButton, paperDocumentImages } = await this.queryWithAI(radioQuery, 'actes-document-selection');
+        
+        if (radioButtons && radioButtons.length > 0) {
+          logger.info({ count: radioButtons.length }, 'Found radio buttons using AI');
+          
+          // Find the best radio button that doesn't correspond to a paper document
+          let selectedRadio = null;
+          
+          for (const radio of radioButtons) {
+            // Check if this radio button is associated with a paper document
+            const radioRow = await radio.evaluateHandle((el: any) => {
+              // Find the closest table row (tr) containing this radio button
+              let current = el;
+              while (current && current.tagName !== 'TR') {
+                current = current.parentElement;
+              }
+              return current;
+            });
+            
+            if (radioRow) {
+              // Check if this row contains a BPD.GIF image (paper document)
+              const hasPaperDoc = await radioRow.evaluate((row: any) => {
+                const imgs = row.querySelectorAll('img');
+                for (const img of imgs) {
+                  if (img.src && img.src.includes('BPD.GIF')) {
+                    return true;
+                  }
+                }
+                return false;
+              });
+              
+              if (!hasPaperDoc) {
+                selectedRadio = radio;
+                logger.info('Found suitable radio button (not a paper document) using AI');
+                break;
+              } else {
+                logger.info('Skipping radio button associated with paper document (BPD.GIF)');
+              }
+            }
+          }
+          
+          if (selectedRadio) {
+            await selectedRadio.click();
+            logger.info('Selected non-paper document radio button using AI');
+            
+            // Click submit button
+            if (submitButton) {
+              await submitButton.click();
+              selectionMade = true;
+              logger.info('Clicked Soumettre button using AI');
+            }
+          } else {
+            logger.warn('All available options appear to be paper documents, will try direct selector method');
+          }
+        }
+      } catch (error) {
+        logger.debug('AI method failed for document selection, trying direct selectors');
+      }
+      
+      // Method 2: Direct selector fallback with paper document avoidance
+      if (!selectionMade) {
+        // Look for radio buttons using various selectors
+        const radioSelectors = [
+          'input[type="radio"]',
+          'input[name*="radio"]', 
+          'input[name*="selection"]',
+          'table tr input[type="radio"]'
+        ];
+        
+        for (const selector of radioSelectors) {
+          const radioButtons = await this.page.$$(selector);
+          if (radioButtons && radioButtons.length > 0) {
+            logger.info({ selector, count: radioButtons.length }, 'Found radio buttons using direct selector');
+            
+            // Find the best radio button that doesn't correspond to a paper document
+            let selectedRadio = null;
+            
+            for (const radio of radioButtons) {
+              // Check if this radio button is in a row with BPD.GIF image
+              const hasPaperDoc = await radio.evaluate((radioEl: any) => {
+                // Find the closest table row containing this radio button
+                let row = radioEl;
+                while (row && row.tagName !== 'TR') {
+                  row = row.parentElement;
+                }
+                
+                if (row) {
+                  // Check if this row contains a BPD.GIF image
+                  const imgs = row.querySelectorAll('img');
+                  for (const img of imgs) {
+                    if (img.src && img.src.includes('BPD.GIF')) {
+                      return true;
+                    }
+                  }
+                }
+                return false;
+              });
+              
+              if (!hasPaperDoc) {
+                selectedRadio = radio;
+                logger.info({ selector }, 'Found suitable radio button (not a paper document) using direct selector');
+                break;
+              } else {
+                logger.info({ selector }, 'Skipping radio button associated with paper document (BPD.GIF)');
+              }
+            }
+            
+            if (selectedRadio) {
+              await selectedRadio.click();
+              logger.info({ selector }, 'Selected non-paper document radio button using direct selector');
+              
+              // Look for submit button
+              const submitSelectors = [
+                'input[value*="Soumettre"]',
+                'button:has-text("Soumettre")',
+                'input[type="submit"]',
+                'button[type="submit"]'
+              ];
+              
+              for (const submitSelector of submitSelectors) {
+                const submitBtn = await this.page.$(submitSelector);
+                if (submitBtn) {
+                  await submitBtn.click();
+                  selectionMade = true;
+                  logger.info({ submitSelector }, 'Clicked Soumettre button using direct selector');
+                  break;
+                }
+              }
+              
+              if (selectionMade) break;
+            } else {
+              logger.warn({ selector }, 'All radio button options appear to be paper documents');
+            }
+          }
+        }
+      }
+      
+      if (!selectionMade) {
+        logger.error('Could not find or select document from similar results');
+        await this.takeDebugScreenshot('actes-document-selection-failed');
+        throw new Error('Failed to select document from similar search results');
+      }
+      
+      // Wait for the page to process the selection
+      await this.page.waitForTimeout(2000);
+      await this.page.waitForLoadState('networkidle', { timeout: 15000 });
+      
+      logger.info('✅ Document selection completed for actes');
+      await this.takeDebugScreenshot('actes-after-document-selection');
+      
+    } catch (error) {
+      logger.error({ error: error instanceof Error ? error.message : error }, 'Error in actes document selection');
+      await this.takeDebugScreenshot('actes-document-selection-error');
+      
+      // Don't throw the error - let the process continue in case the selection wasn't needed
+      logger.info('Continuing despite document selection error');
     }
   }
 

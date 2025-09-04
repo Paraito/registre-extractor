@@ -1,7 +1,6 @@
 import { AIRegistreExtractor as RegistreExtractor } from './extractor-ai';
 import { supabase } from '../utils/supabase';
 import { logger } from '../utils/logger';
-import { config } from '../config';
 import { ExtractionQueueJob, WorkerAccount, WorkerStatus, DataValidationError } from '../types';
 import { v4 as uuidv4 } from 'uuid';
 import fs from 'fs/promises';
@@ -40,11 +39,11 @@ export class ExtractionWorkerV2 {
       this.currentAccount = await this.getAvailableAccount();
       this.workerStatus.account_id = this.currentAccount.id;
       
-      // Initialize extractor with account
+      // Initialize extractor with account (visible browser in development)
       this.extractor = new RegistreExtractor(
         this.currentAccount,
         this.workerId,
-        config.isProduction
+        false  // headless = false for debugging (visible browser)
       );
       
       await this.extractor.initialize();
@@ -146,6 +145,20 @@ export class ExtractionWorkerV2 {
     // Set worker to idle while looking for jobs
     this.workerStatus.status = 'idle';
     
+    // First check if there's already a job assigned to this worker
+    const { data: assignedJob, error: assignedError } = await supabase
+      .from('extraction_queue')
+      .select('*')
+      .eq('worker_id', this.workerId)
+      .eq('status', 'En traitement')
+      .limit(1);
+
+    if (!assignedError && assignedJob && assignedJob.length > 0) {
+      logger.info({ jobId: assignedJob[0].id, workerId: this.workerId }, 'Found job already assigned to this worker');
+      return assignedJob[0];
+    }
+
+    // If no assigned job, look for new jobs to claim
     const { data, error } = await supabase
       .from('extraction_queue')
       .select('*')
