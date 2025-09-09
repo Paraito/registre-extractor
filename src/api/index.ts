@@ -98,7 +98,7 @@ app.post('/api/extractions', async (req: Request, res: Response, next: NextFunct
     res.status(201).json({
       extraction_id: job.id,
       document_source: job.document_source,
-      status: job.status,
+      status_id: job.status_id,
       document_number: job.document_number,
       document_number_normalized: job.document_number_normalized,
       created_at: job.created_at,
@@ -122,7 +122,7 @@ app.get('/api/extractions/:id', async (req: Request, res: Response, next: NextFu
     res.json({
       extraction_id: job.id,
       document_source: job.document_source,
-      status: job.status,
+      status_id: job.status_id,
       document_number: job.document_number,
       document_number_normalized: job.document_number_normalized,
       supabase_path: job.supabase_path,
@@ -148,7 +148,7 @@ app.get('/api/extractions', async (req: Request, res: Response, next: NextFuncti
       jobs: jobs.map(job => ({
         extraction_id: job.id,
         document_source: job.document_source,
-        status: job.status,
+        status_id: job.status_id,
         document_number: job.document_number,
         document_number_normalized: job.document_number_normalized,
         circonscription_fonciere: job.circonscription_fonciere,

@@ -1,4 +1,5 @@
 import { supabase } from './src/utils/supabase';
+import { EXTRACTION_STATUS } from './src/types';
 
 async function assignJobToWorker(jobId: string, workerId: string) {
   console.log(`🎯 Assigning job ${jobId} to worker ${workerId}...`);
@@ -8,7 +9,7 @@ async function assignJobToWorker(jobId: string, workerId: string) {
     const { data, error } = await supabase
       .from('extraction_queue')
       .update({
-        status: 'En attente',
+        status_id: EXTRACTION_STATUS.EN_ATTENTE,
         worker_id: null, // Clear any existing assignment first
         processing_started_at: null,
         error_message: null

@@ -1,4 +1,5 @@
 import { supabase } from './src/utils/supabase';
+import { EXTRACTION_STATUS } from './src/types';
 
 async function resetJobForWorker() {
   const jobId = '5ccddc25-fe14-4282-aa80-29975cdeb5a5';
@@ -11,7 +12,7 @@ async function resetJobForWorker() {
     const { error: resetError } = await supabase
       .from('extraction_queue')
       .update({
-        status: 'En attente',
+        status_id: EXTRACTION_STATUS.EN_ATTENTE,
         worker_id: null,
         processing_started_at: null,
         error_message: null,
@@ -32,12 +33,12 @@ async function resetJobForWorker() {
     const { data, error } = await supabase
       .from('extraction_queue')
       .update({
-        status: 'En traitement', // Claim it immediately
+        status_id: EXTRACTION_STATUS.EN_TRAITEMENT, // Claim it immediately
         worker_id: workerId,     // Assign to YOUR worker
         processing_started_at: new Date().toISOString()
       })
       .eq('id', jobId)
-      .eq('status', 'En attente') // Only if still available
+      .eq('status_id', EXTRACTION_STATUS.EN_ATTENTE) // Only if still available
       .select()
       .single();
 

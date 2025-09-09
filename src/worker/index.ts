@@ -2,7 +2,7 @@ import { AIRegistreExtractor as RegistreExtractor } from './extractor-ai';
 import { supabase } from '../utils/supabase';
 import { logger } from '../utils/logger';
 import { config } from '../config';
-import { ExtractionQueueJob, WorkerAccount, WorkerStatus } from '../types';
+import { ExtractionQueueJob, WorkerAccount, WorkerStatus, EXTRACTION_STATUS } from '../types';
 import { v4 as uuidv4 } from 'uuid';
 import fs from 'fs/promises';
 import { convertToExtractionConfig } from '../queue/manager';
@@ -209,7 +209,7 @@ export class ExtractionWorker {
     const { data: staleJobs } = await supabase
       .from('extraction_queue')
       .select('*')
-      .eq('status', 'En traitement')
+      .eq('status_id', EXTRACTION_STATUS.EN_TRAITEMENT)
       .lt('processing_started_at', fiveMinutesAgo)
       .limit(1);
     
@@ -218,7 +218,7 @@ export class ExtractionWorker {
       await supabase
         .from('extraction_queue')
         .update({
-          status: 'En attente',
+          status_id: EXTRACTION_STATUS.EN_ATTENTE,
           worker_id: null,
           processing_started_at: null,
         })
@@ -230,7 +230,7 @@ export class ExtractionWorker {
     const { data, error } = await supabase
       .from('extraction_queue')
       .select('*')
-      .eq('status', 'En attente')
+      .eq('status_id', EXTRACTION_STATUS.EN_ATTENTE)
       .order('created_at', { ascending: true })
       .limit(1);
 
@@ -244,12 +244,12 @@ export class ExtractionWorker {
     const { data: claimedJob, error: claimError } = await supabase
       .from('extraction_queue')
       .update({
-        status: 'En traitement',
+        status_id: EXTRACTION_STATUS.EN_TRAITEMENT,
         worker_id: this.workerId,
         processing_started_at: new Date().toISOString(),
       })
       .eq('id', job.id)
-      .eq('status', 'En attente') // Ensure it's still available
+      .eq('status_id', EXTRACTION_STATUS.EN_ATTENTE) // Ensure it's still available
       .select()
       .single();
 
@@ -313,7 +313,7 @@ export class ExtractionWorker {
       await supabase
         .from('extraction_queue')
         .update({
-          status: 'Complété',
+          status_id: EXTRACTION_STATUS.COMPLETE,
           supabase_path: `${bucketName}/${storagePath}`,
           attemtps: (job.attemtps || 0) + 1,
         })
@@ -360,7 +360,7 @@ export class ExtractionWorker {
         await supabase
           .from('extraction_queue')
           .update({
-            status: 'En attente',
+            status_id: EXTRACTION_STATUS.EN_ATTENTE,
             worker_id: null,
             processing_started_at: null,
             // Keep the error message for debugging but don't increment attempts
@@ -379,7 +379,7 @@ export class ExtractionWorker {
       await supabase
         .from('extraction_queue')
         .update({
-          status: attempts >= maxAttempts ? 'Erreur' : 'En attente',
+          status_id: attempts >= maxAttempts ? EXTRACTION_STATUS.ERREUR : EXTRACTION_STATUS.EN_ATTENTE,
           error_message: error instanceof Error ? error.message : 'Unknown error',
           attemtps: attempts,
           worker_id: attempts >= maxAttempts ? this.workerId : null,
@@ -447,7 +447,7 @@ export class ExtractionWorker {
       await supabase
         .from('extraction_queue')
         .update({
-          status: 'En attente',
+          status_id: EXTRACTION_STATUS.EN_ATTENTE,
           worker_id: null,
           processing_started_at: null,
           error_message: 'Worker shutdown - job released'

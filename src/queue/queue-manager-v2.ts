@@ -2,7 +2,7 @@ import Bull from 'bull';
 import { supabase } from '../utils/supabase';
 import { logger } from '../utils/logger';
 import { config } from '../config';
-import { ExtractionQueueJob, ExtractionConfigQueue } from '../types';
+import { ExtractionQueueJob, ExtractionConfigQueue, EXTRACTION_STATUS } from '../types';
 
 export class QueueManagerV2 {
   private queue: Bull.Queue<ExtractionQueueJob>;
@@ -40,7 +40,7 @@ export class QueueManagerV2 {
       const { data: pendingJobs, error } = await supabase
         .from('extraction_queue')
         .select('*')
-        .in('status', ['En attente', 'En traitement'])
+        .in('status_id', [EXTRACTION_STATUS.EN_ATTENTE, EXTRACTION_STATUS.EN_TRAITEMENT])
         .order('created_at', { ascending: true });
 
       if (error) {
@@ -53,11 +53,11 @@ export class QueueManagerV2 {
         
         for (const job of pendingJobs) {
           // Reset processing jobs back to waiting
-          if (job.status === 'En traitement') {
+          if (job.status_id === EXTRACTION_STATUS.EN_TRAITEMENT) {
             await supabase
               .from('extraction_queue')
               .update({ 
-                status: 'En attente',
+                status_id: EXTRACTION_STATUS.EN_ATTENTE,
                 worker_id: null,
                 processing_started_at: null,
               })
@@ -89,7 +89,7 @@ export class QueueManagerV2 {
       cadastre: params.cadastre,
       designation_secondaire: params.designation_secondaire,
       acte_type: params.acte_type,
-      status: 'En attente',
+      status_id: EXTRACTION_STATUS.EN_ATTENTE,
       attemtps: 0,
       max_attempts: 3,
     };
@@ -155,15 +155,14 @@ export class QueueManagerV2 {
   }
 
   async getJobsByStatus(status: string): Promise<ExtractionQueueJob[]> {
-    const statusMap: Record<string, string> = {
-      'all': '',
-      'queued': 'En attente',
-      'processing': 'En traitement',
-      'completed': 'Complété',
-      'failed': 'Erreur',
+    const statusMap: Record<string, number> = {
+      'queued': EXTRACTION_STATUS.EN_ATTENTE,
+      'processing': EXTRACTION_STATUS.EN_TRAITEMENT,
+      'completed': EXTRACTION_STATUS.COMPLETE,
+      'failed': EXTRACTION_STATUS.ERREUR,
     };
 
-    const mappedStatus = statusMap[status] || status;
+    const mappedStatusId = statusMap[status];
 
     const query = supabase
       .from('extraction_queue')
@@ -171,8 +170,8 @@ export class QueueManagerV2 {
       .order('created_at', { ascending: false })
       .limit(100);
 
-    if (mappedStatus && mappedStatus !== '') {
-      query.eq('status', mappedStatus);
+    if (mappedStatusId !== undefined && status !== 'all') {
+      query.eq('status_id', mappedStatusId);
     }
 
     const { data, error } = await query;
@@ -196,7 +195,7 @@ export class QueueManagerV2 {
       throw new Error('Job not found');
     }
 
-    if (job.status !== 'Erreur') {
+    if (job.status_id !== EXTRACTION_STATUS.ERREUR) {
       throw new Error('Can only retry failed jobs');
     }
 
@@ -204,7 +203,7 @@ export class QueueManagerV2 {
     await supabase
       .from('extraction_queue')
       .update({
-        status: 'En attente',
+        status_id: EXTRACTION_STATUS.EN_ATTENTE,
         error_message: null,
         error_screenshot: null,
         worker_id: null,
@@ -227,7 +226,7 @@ export class QueueManagerV2 {
     await supabase
       .from('extraction_queue')
       .update({
-        status: 'Erreur',
+        status_id: EXTRACTION_STATUS.ERREUR,
         error_message: 'Job cancelled by user',
       })
       .eq('id', jobId);
@@ -267,7 +266,7 @@ export class QueueManagerV2 {
     const { data, error } = await supabase
       .from('extraction_queue')
       .select('*')
-      .eq('status', 'En attente')
+      .eq('status_id', EXTRACTION_STATUS.EN_ATTENTE)
       .order('priority', { ascending: false })
       .order('created_at', { ascending: true })
       .limit(1)
