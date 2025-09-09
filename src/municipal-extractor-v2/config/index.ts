@@ -74,7 +74,7 @@ export interface MunicipalExtractorConfig {
 }
 
 function loadConfig(): MunicipalExtractorConfig {
-  const isProduction = process.env.NODE_ENV === 'production';
+  // const isProduction = process.env.NODE_ENV === 'production'; // for future use
 
   return {
     database: {
@@ -195,10 +195,21 @@ export const environments = {
       locale: 'fr-CA'
     },
     monitoring: {
-      enabled: false
+      enabled: false,
+      metrics_retention_days: 7,
+      alert_thresholds: {
+        success_rate_min: 0.8,
+        cost_per_extraction_max: 1.0,
+        avg_execution_time_max: 30000
+      }
     },
     api: {
-      cors_origin: '*'
+      port: 3001,
+      cors_origin: '*',
+      rate_limit: {
+        requests_per_minute: 100,
+        burst_limit: 20
+      }
     }
   },
   
@@ -211,10 +222,21 @@ export const environments = {
       locale: 'fr-CA'
     },
     monitoring: {
-      enabled: true
+      enabled: true,
+      metrics_retention_days: 30,
+      alert_thresholds: {
+        success_rate_min: 0.95,
+        cost_per_extraction_max: 0.5,
+        avg_execution_time_max: 15000
+      }
     },
     api: {
-      cors_origin: process.env.ALLOWED_ORIGINS || 'https://yourdomain.com'
+      port: parseInt(process.env.MUNICIPAL_API_PORT || '3001'),
+      cors_origin: process.env.ALLOWED_ORIGINS || 'https://yourdomain.com',
+      rate_limit: {
+        requests_per_minute: 200,
+        burst_limit: 50
+      }
     }
   },
   
@@ -224,10 +246,17 @@ export const environments = {
       supabase_service_key: 'test-key'
     },
     workers: {
-      max_concurrent_jobs: 1
+      max_concurrent_jobs: 1,
+      screenshot_interval: 5000,
+      stuck_detection_timeout: 30000,
+      max_recovery_attempts: 2,
+      idle_timeout_ms: 60000
     },
     cache: {
-      enabled: false
+      enabled: false,
+      min_confidence_to_cache: 0.8,
+      max_cache_age_days: 7,
+      similarity_threshold: 0.85
     }
   }
 };

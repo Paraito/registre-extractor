@@ -17,7 +17,10 @@ import {
 } from '../types';
 
 export class AIScreenshotAnalyzer {
-  constructor(private workerId: string) {}
+  // @ts-ignore - workerId reserved for future use
+  constructor(private _workerId: string) {
+    // _workerId reserved for future logging and tracking purposes
+  }
 
   async analyzeScreenshotForProgress(
     screenshot: Buffer,
@@ -158,7 +161,7 @@ export class AIScreenshotAnalyzer {
     return 'general_page';
   }
 
-  private async detectForms(screenshot: Buffer, context: any): Promise<FormAnalysis[]> {
+  private async detectForms(_screenshot: Buffer, context: any): Promise<FormAnalysis[]> {
     // Simulate form detection - would use actual OCR/vision analysis
     const forms: FormAnalysis[] = [];
     
@@ -189,7 +192,7 @@ export class AIScreenshotAnalyzer {
     return forms;
   }
 
-  private async detectClickableElements(screenshot: Buffer, context: any): Promise<ClickableElement[]> {
+  private async detectClickableElements(_screenshot: Buffer, _context: any): Promise<ClickableElement[]> {
     // Simulate clickable element detection
     const elements: ClickableElement[] = [];
     
@@ -221,7 +224,7 @@ export class AIScreenshotAnalyzer {
     return elements;
   }
 
-  private async detectDataRegions(screenshot: Buffer, context: any): Promise<DataRegion[]> {
+  private async detectDataRegions(_screenshot: Buffer, context: any): Promise<DataRegion[]> {
     const regions: DataRegion[] = [];
     
     if (context.page_url.includes('results')) {
@@ -236,7 +239,7 @@ export class AIScreenshotAnalyzer {
     return regions;
   }
 
-  private async detectNavigationElements(screenshot: Buffer, context: any): Promise<NavigationElement[]> {
+  private async detectNavigationElements(_screenshot: Buffer, _context: any): Promise<NavigationElement[]> {
     const navElements: NavigationElement[] = [];
     
     navElements.push({
@@ -252,7 +255,7 @@ export class AIScreenshotAnalyzer {
     return navElements;
   }
 
-  private async detectVisualElements(screenshot: Buffer, context: any): Promise<VisualElement[]> {
+  private async detectVisualElements(_screenshot: Buffer, _context: any): Promise<VisualElement[]> {
     // This would use actual computer vision
     const elements: VisualElement[] = [];
     
@@ -279,7 +282,7 @@ export class AIScreenshotAnalyzer {
     return elements;
   }
 
-  private async detectPotentialIssues(screenshot: Buffer, context: any): Promise<string[]> {
+  private async detectPotentialIssues(_screenshot: Buffer, context: any): Promise<string[]> {
     const issues: string[] = [];
     
     // Common municipal site issues
@@ -304,7 +307,7 @@ export class AIScreenshotAnalyzer {
 
   private generateRecommendedAction(
     visualAnalysis: any,
-    aiAnalysis: any,
+    _aiAnalysis: any,
     currentGoal: string
   ): RecommendedAction {
     // Generate recommended action based on analysis
@@ -368,7 +371,7 @@ export class AIScreenshotAnalyzer {
   }
 
   private async generateRecoveryAction(
-    screenshot: Buffer,
+    _screenshot: Buffer,
     visualAnalysis: any,
     context: any
   ): Promise<RecoveryAction> {

@@ -10,7 +10,7 @@ import {
   ExtractionResponse,
   BatchExtractionRequest,
   ExtractionJobV2,
-  StandardizedExtractionResult
+  // StandardizedExtractionResult - commented out as unused
 } from '../types';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -18,7 +18,7 @@ const app = express();
 const PORT = process.env.MUNICIPAL_API_PORT || 3001; // Different port from v1
 
 // Middleware
-app.use((req, res, next) => {
+app.use((_req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Headers', 'Content-Type');
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE');
@@ -27,22 +27,22 @@ app.use((req, res, next) => {
 app.use(express.json({ limit: '10mb' }));
 
 // Request logging
-app.use((req, res, next) => {
+app.use((_req, _res, next) => {
   logger.info({ 
-    method: req.method, 
-    url: req.url,
-    ip: req.ip
+    method: _req.method, 
+    url: _req.url,
+    ip: _req.ip
   }, 'API request received');
   next();
 });
 
 // Health check endpoint
-app.get('/health', async (req, res) => {
+app.get('/health', async (_req, res) => {
   try {
     const dbHealth = await supabaseV2.healthCheck();
     const activeWorkers = await supabaseV2.getActiveWorkers();
     
-    res.json({
+    return res.json({
       status: 'healthy',
       version: '2.0.0',
       database: dbHealth ? 'connected' : 'disconnected',
@@ -51,7 +51,7 @@ app.get('/health', async (req, res) => {
     });
   } catch (error) {
     logger.error({ error }, 'Health check failed');
-    res.status(503).json({
+    return res.status(503).json({
       status: 'unhealthy',
       error: 'Service unavailable'
     });
@@ -102,11 +102,11 @@ app.post('/api/v2/extractions', async (req, res) => {
       data_type: request.data_type 
     }, 'Extraction job created');
 
-    res.status(201).json(response);
+    return res.status(201).json(response);
 
   } catch (error) {
     logger.error({ error, request: req.body }, 'Failed to create extraction job');
-    res.status(500).json({
+    return res.status(500).json({
       error: 'Internal server error',
       message: 'Failed to create extraction job'
     });
@@ -145,11 +145,11 @@ app.get('/api/v2/extractions/:jobId', async (req, res) => {
       cache_hit_rate: job.cache_hit_rate
     };
 
-    res.json(response);
+    return res.json(response);
 
   } catch (error) {
     logger.error({ error, job_id: req.params.jobId }, 'Failed to get job status');
-    res.status(500).json({
+    return res.status(500).json({
       error: 'Internal server error',
       message: 'Failed to get job status'
     });
@@ -176,7 +176,7 @@ app.get('/api/v2/extractions', async (req, res) => {
       offset: parseInt(offset as string)
     });
 
-    res.json({
+    return res.json({
       jobs: jobs.map(job => ({
         job_id: job.id,
         site_url: job.site_url,
@@ -196,7 +196,7 @@ app.get('/api/v2/extractions', async (req, res) => {
 
   } catch (error) {
     logger.error({ error, query: req.query }, 'Failed to list jobs');
-    res.status(500).json({
+    return res.status(500).json({
       error: 'Internal server error',
       message: 'Failed to list jobs'
     });
@@ -260,7 +260,7 @@ app.post('/api/v2/extractions/batch', async (req, res) => {
       total_estimated_cost: totalEstimatedCost 
     }, 'Batch extraction jobs created');
 
-    res.status(201).json({
+    return res.status(201).json({
       batch_id: uuidv4(),
       jobs: createdJobs.map(job => ({
         job_id: job.id,
@@ -272,7 +272,7 @@ app.post('/api/v2/extractions/batch', async (req, res) => {
 
   } catch (error) {
     logger.error({ error, request: req.body }, 'Failed to create batch extraction jobs');
-    res.status(500).json({
+    return res.status(500).json({
       error: 'Internal server error',
       message: 'Failed to create batch extraction jobs'
     });
@@ -305,7 +305,7 @@ app.post('/api/v2/extractions/:jobId/cancel', async (req, res) => {
 
     logger.info({ job_id: jobId }, 'Job cancelled');
 
-    res.json({
+    return res.json({
       job_id: jobId,
       status: 'cancelled',
       message: 'Job cancelled successfully'
@@ -313,7 +313,7 @@ app.post('/api/v2/extractions/:jobId/cancel', async (req, res) => {
 
   } catch (error) {
     logger.error({ error, job_id: req.params.jobId }, 'Failed to cancel job');
-    res.status(500).json({
+    return res.status(500).json({
       error: 'Internal server error',
       message: 'Failed to cancel job'
     });
@@ -354,7 +354,7 @@ app.get('/api/v2/metrics', async (req, res) => {
       ? (totalCacheHits / (totalCacheHits + totalCacheMisses)) * 100 
       : 0;
 
-    res.json({
+    return res.json({
       period: {
         start_date: startDate.toISOString().split('T')[0],
         end_date: endDate.toISOString().split('T')[0]
@@ -396,7 +396,7 @@ app.get('/api/v2/metrics', async (req, res) => {
 
   } catch (error) {
     logger.error({ error, query: req.query }, 'Failed to get metrics');
-    res.status(500).json({
+    return res.status(500).json({
       error: 'Internal server error',
       message: 'Failed to get metrics'
     });
@@ -404,11 +404,11 @@ app.get('/api/v2/metrics', async (req, res) => {
 });
 
 // Get supported sites
-app.get('/api/v2/sites', async (req, res) => {
+app.get('/api/v2/sites', async (_req, res) => {
   try {
     const sitePatterns = await supabaseV2.getSitePatternByType('municipal');
     
-    res.json({
+    return res.json({
       supported_sites: sitePatterns.map(pattern => ({
         domain: pattern.site_domain,
         name: pattern.site_name,
@@ -422,7 +422,7 @@ app.get('/api/v2/sites', async (req, res) => {
 
   } catch (error) {
     logger.error({ error }, 'Failed to get supported sites');
-    res.status(500).json({
+    return res.status(500).json({
       error: 'Internal server error',
       message: 'Failed to get supported sites'
     });
@@ -430,7 +430,7 @@ app.get('/api/v2/sites', async (req, res) => {
 });
 
 // Dashboard endpoint (serves HTML)
-app.get('/dashboard', (req, res) => {
+app.get('/dashboard', (_req, res) => {
   const dashboardHTML = `
 <!DOCTYPE html>
 <html>
@@ -489,10 +489,10 @@ app.get('/dashboard', (req, res) => {
 });
 
 // Error handling
-app.use((error: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+app.use((error: any, req: express.Request, res: express.Response, _next: express.NextFunction) => {
   logger.error({ error, url: req.url, method: req.method }, 'Unhandled API error');
   
-  res.status(500).json({
+  return res.status(500).json({
     error: 'Internal server error',
     message: 'An unexpected error occurred'
   });
@@ -565,17 +565,17 @@ function calculateProgress(job: ExtractionJobV2): number {
 }
 
 // These would be implemented in the supabase client
-async function getJobById(jobId: string): Promise<ExtractionJobV2 | null> {
+async function getJobById(_jobId: string): Promise<ExtractionJobV2 | null> {
   // Mock implementation
   return null;
 }
 
-async function listJobs(filters: any): Promise<ExtractionJobV2[]> {
+async function listJobs(_filters: any): Promise<ExtractionJobV2[]> {
   // Mock implementation
   return [];
 }
 
-async function cancelJob(jobId: string): Promise<void> {
+async function cancelJob(_jobId: string): Promise<void> {
   // Mock implementation
 }
 

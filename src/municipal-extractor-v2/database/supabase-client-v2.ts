@@ -9,8 +9,8 @@ import {
   CachedProcess,
   ScreenshotAnalysis,
   SitePattern,
-  DataSchema,
-  FieldMapping,
+  // DataSchema - commented out as unused
+  // FieldMapping - commented out as unused
   ExtractionAnalytics,
   LearningEvent
 } from '../types';

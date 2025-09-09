@@ -17,7 +17,8 @@ import {
 import { createHash } from 'crypto';
 
 export class ProcessCacheEngine {
-  constructor(private workerId: string) {}
+  // @ts-ignore - workerId reserved for future use
+  constructor(private _workerId: string) {}
 
   /**
    * Find cached process for extraction request - the main cost-saving function
@@ -369,7 +370,7 @@ export class ProcessCacheEngine {
   private adaptExtractionSteps(
     originalSteps: ExtractionStep[],
     newTargetFields: string[],
-    adaptationPlan: any
+    _adaptationPlan: any
   ): ExtractionStep[] {
     const adaptedSteps = [...originalSteps];
 
@@ -468,7 +469,7 @@ export class ProcessCacheEngine {
     };
   }
 
-  private async executeStep(step: ExtractionStep, job: ExtractionJobV2): Promise<any> {
+  private async executeStep(step: ExtractionStep, _job: ExtractionJobV2): Promise<any> {
     // This would integrate with browser automation
     // For now, simulate successful step execution
     
@@ -542,7 +543,7 @@ export class ProcessCacheEngine {
       }));
   }
 
-  private extractValidationRules(trace: ExecutionTrace, result: StandardizedExtractionResult): any[] {
+  private extractValidationRules(_trace: ExecutionTrace, result: StandardizedExtractionResult): any[] {
     const rules: any[] = [];
     
     Object.keys(result.data).forEach(field => {
