@@ -307,7 +307,7 @@ export class SequentialThinkingClient {
     return basePlan;
   }
 
-  private generateStageActions(stage: string, context: Record<string, any>): string[] {
+  private generateStageActions(stage: string, _context: Record<string, any>): string[] {
     const actionMap: Record<string, string[]> = {
       'SiteAnalysis': [
         'Navigate to site URL',
@@ -365,7 +365,7 @@ export class SequentialThinkingClient {
     ];
   }
 
-  private generateFallbackStrategies(context: Record<string, any>): string[] {
+  private generateFallbackStrategies(_context: Record<string, any>): string[] {
     return [
       'Switch to alternative selectors',
       'Use screenshot analysis for navigation',
@@ -375,7 +375,7 @@ export class SequentialThinkingClient {
     ];
   }
 
-  private generateSuccessCriteria(context: Record<string, any>): string[] {
+  private generateSuccessCriteria(_context: Record<string, any>): string[] {
     return [
       'Target data successfully extracted',
       'Data quality meets validation criteria',

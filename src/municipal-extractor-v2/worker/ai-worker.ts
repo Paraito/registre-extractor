@@ -21,7 +21,8 @@ export class MunicipalAIWorker {
   private workerId: string;
   private workerStatus: AIWorker;
   private heartbeatInterval: NodeJS.Timeout | null = null;
-  private isProcessing: boolean = false;
+  // @ts-ignore - reserved for future use
+  private _isProcessing: boolean = false;
   private shouldStop: boolean = false;
   private lastJobTime: number = Date.now();
   private idleTimeoutMs: number = 5 * 60 * 1000; // 5 minutes
@@ -154,7 +155,7 @@ export class MunicipalAIWorker {
       data_type: job.data_type 
     }, 'Processing extraction job');
 
-    this.isProcessing = true;
+    this._isProcessing = true;
     this.workerStatus.status = 'busy';
     this.workerStatus.current_job_id = job.id;
 
@@ -186,7 +187,7 @@ export class MunicipalAIWorker {
     } catch (error) {
       await this.handleJobFailure(job, error as Error, startTime);
     } finally {
-      this.isProcessing = false;
+      this._isProcessing = false;
       this.workerStatus.status = 'idle';
       this.workerStatus.current_job_id = undefined;
     }
@@ -297,7 +298,7 @@ export class MunicipalAIWorker {
   private async executeExtractionPlan(
     job: ExtractionJobV2,
     sitePattern: SitePattern,
-    extractionPlan: any,
+    _extractionPlan: any,
     executionTrace: ExecutionTrace
   ): Promise<Record<string, any>> {
     logger.info({ job_id: job.id }, 'Executing extraction plan');
@@ -347,7 +348,7 @@ export class MunicipalAIWorker {
       // Attempt recovery with screenshot analysis
       const recoveryResult = await this.attemptRecovery(job, error as Error, executionTrace);
       if (recoveryResult.success) {
-        return recoveryResult.data;
+        return recoveryResult.data || {};
       }
 
       throw error;
@@ -517,7 +518,7 @@ export class MunicipalAIWorker {
     }
   }
 
-  private async executeRecoveryAction(recoveryAction: any, job: ExtractionJobV2): Promise<Record<string, any>> {
+  private async executeRecoveryAction(recoveryAction: any, _job: ExtractionJobV2): Promise<Record<string, any>> {
     // Execute the AI-generated recovery actions
     const recoveredData: Record<string, any> = {};
     
@@ -535,8 +536,8 @@ export class MunicipalAIWorker {
 
   private async standardizeExtractedData(
     rawData: Record<string, any>,
-    dataType: string,
-    sitePattern: string
+    _dataType: string,
+    _sitePattern: string
   ): Promise<Record<string, any>> {
     // This would use the data standardization engine
     // For now, return the raw data with some basic standardization

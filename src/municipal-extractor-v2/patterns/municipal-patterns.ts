@@ -313,8 +313,8 @@ export class MunicipalSitePatternRecognizer {
 
   private findKnownPattern(domain: string): any | null {
     // Direct match
-    if (MunicipalSitePatternRecognizer.KNOWN_PATTERNS[domain]) {
-      return MunicipalSitePatternRecognizer.KNOWN_PATTERNS[domain];
+    if (MunicipalSitePatternRecognizer.KNOWN_PATTERNS[domain as keyof typeof MunicipalSitePatternRecognizer.KNOWN_PATTERNS]) {
+      return MunicipalSitePatternRecognizer.KNOWN_PATTERNS[domain as keyof typeof MunicipalSitePatternRecognizer.KNOWN_PATTERNS];
     }
 
     // Partial match for subdomains
@@ -423,10 +423,10 @@ export class MunicipalSitePatternRecognizer {
     dataType: string,
     targetFields: string[]
   ): any | null {
-    const knownPattern = MunicipalSitePatternRecognizer.KNOWN_PATTERNS[sitePattern.site_domain];
+    const knownPattern = MunicipalSitePatternRecognizer.KNOWN_PATTERNS[sitePattern.site_domain as keyof typeof MunicipalSitePatternRecognizer.KNOWN_PATTERNS];
     if (!knownPattern || !knownPattern.common_flows) return null;
 
-    const flow = knownPattern.common_flows[dataType];
+    const flow = knownPattern.common_flows[dataType as keyof typeof knownPattern.common_flows] as any;
     if (!flow) return null;
 
     return {
@@ -578,7 +578,7 @@ export class MunicipalSitePatternRecognizer {
     return domain.replace(/^www\./, '').replace(/\.(ca|qc\.ca)$/, '');
   }
 
-  private classifySiteType(domain: string, analysis: any): 'municipal' | 'provincial' | 'federal' | 'flood' | 'tax' {
+  private classifySiteType(domain: string, _analysis: any): 'municipal' | 'provincial' | 'federal' | 'flood' | 'tax' {
     if (domain.includes('ville.')) return 'municipal';
     if (domain.includes('gouv.qc.ca')) return 'provincial';
     if (domain.includes('gc.ca')) return 'federal';
@@ -595,7 +595,7 @@ export class MunicipalSitePatternRecognizer {
     return 'QC'; // Default for this system
   }
 
-  private detectLanguage(analysis: any): string {
+  private detectLanguage(_analysis: any): string {
     // Would analyze content for language detection
     return 'fr'; // Default for Quebec
   }
