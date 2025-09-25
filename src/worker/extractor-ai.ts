@@ -666,21 +666,36 @@ export class AIRegistreExtractor {
           }
         }
 
-        // Step 2: Intelligent Cadastre Selection (excluding failed ones)
+        // Step 2: Intelligent Cadastre Selection
         logger.info({ attempt, failedCadastres }, 'Step 2: Selecting cadastre with LLM');
         const cadastreSelect = await this.page.$('#selCadst');
         let selectedCadastre = '';
+        let selectedDesignation = ''; // Declare here so it's available in error handling
 
         if (cadastreSelect) {
           // Get all cadastre options
           const cadastreOptions = await extractSelectOptions(cadastreSelect);
 
-          // Build exclude list - all previously failed cadastres
-          let excludeList = [...failedCadastres];
+          // Build exclude list - Note: We DON'T exclude cadastres that failed with different designation
+          // as per user guidance: same cadastre can be tried with different designation
+          let excludeList: string[] = [];
+
+          // On attempts > 1, if we're just retrying Cadastre du Québec without other options, exclude it
+          if (attempt > 1 && config.cadastre?.toLowerCase().includes('québec')) {
+            const quebecOption = cadastreOptions.find(opt =>
+              opt.text === 'Cadastre du Québec' || opt.text.includes('Québec')
+            );
+            if (quebecOption && attemptedAlternatives.some(a => a.includes('Cadastre du Québec'))) {
+              excludeList.push(quebecOption.text);
+              logger.info({ attempt }, 'Excluding Cadastre du Québec from this attempt since already tried');
+            }
+          }
+
           logger.info({
             attempt,
             excludeList,
-            failedCadastres
+            failedCadastres,
+            totalOptions: cadastreOptions.length
           }, 'Exclude list for this attempt');
 
           // Log available options for debugging
@@ -760,168 +775,342 @@ export class AIRegistreExtractor {
           await lotNumberInput.fill(lotNumberNoSpaces);
         }
 
-        // Step 4: ALWAYS process Designation Secondaire with full LLM logic
+        // Step 4: Process Designation Secondaire (after cadastre is selected)
         logger.info({ selectedCadastre, attempt }, 'Step 4: Processing designation secondaire');
 
-        // Wait for designation dropdown to update after cadastre selection
-        await this.page.waitForTimeout(2000);
+        // CRITICAL: Wait for the page to update after cadastre selection
+        // The designation dropdown options depend on the selected cadastre
+        await this.page.waitForTimeout(3000); // Give more time for dynamic update
 
-        let designationSelect = null;
-        try {
-          designationSelect = await this.page.$('#selDesgnSecnd');
-        } catch (e) {
-          logger.warn({ attempt, error: e }, 'Failed to query designation dropdown');
-        }
+        // Process designation with multiple retries to handle page updates
+        let designationProcessed = false;
 
-        if (designationSelect) {
+        for (let designRetry = 1; designRetry <= 3 && !designationProcessed; designRetry++) {
           try {
-            // Get all designation options
+            logger.debug({ attempt, designRetry }, 'Attempting to process designation dropdown');
+
+            // Check if page is still accessible
+            await this.page.evaluate(() => document.body).catch(() => {
+              logger.warn({ attempt, designRetry }, 'Page context lost, waiting for stability');
+              return null;
+            });
+
+            // Get the designation dropdown
+            const designationSelect = await this.page.$('#selDesgnSecnd');
+
+            if (!designationSelect) {
+              // Only log this once after all retries
+              if (designRetry === 3) {
+                attemptedAlternatives.push(`Attempt ${attempt}: Designation=N/A (dropdown not present)`);
+                logger.info({ attempt }, 'Designation dropdown not found on page after retries');
+              }
+              await this.page.waitForTimeout(1000);
+              continue;
+            }
+
+            // Get all available options
             const designationOptions = await extractSelectOptions(designationSelect);
 
             logger.info({
               attempt,
+              designRetry,
               selectedCadastre,
               optionCount: designationOptions.length,
               allOptions: designationOptions.map(o => o.text),
               contextString
             }, 'Available designation options after cadastre selection');
 
-            if (designationOptions.length > 0) {
-              // ALWAYS use LLM to find best match (even if it might be none)
-              logger.info({ attempt }, 'Calling LLM for designation selection');
-
-              const { bestOption, reasoning } = await this.findBestOptionWithLLM(
-                designationOptions,
-                contextString,
-                'designation',
-                [selectedCadastre], // Pass selected cadastre as context
-                attempt
-              );
-
-              if (bestOption) {
-                attemptedAlternatives.push(`Attempt ${attempt}: Designation="${bestOption.text}" (${reasoning})`);
-                logger.info({
-                  attempt,
-                  selected: bestOption.text,
-                  value: bestOption.value,
-                  reasoning
-                }, 'LLM selected designation option');
-
-                await designationSelect.selectOption({ value: bestOption.value });
-              } else {
-                // No match found - this is OK, it's optional
-                attemptedAlternatives.push(`Attempt ${attempt}: Designation=none (LLM: no match in options)`);
-                logger.info({
-                  attempt,
-                  reasoning,
-                  contextString,
-                  availableOptions: designationOptions.map(o => o.text)
-                }, 'LLM found no matching designation - leaving empty (optional)');
-              }
-            } else {
-              // No options available in dropdown
-              attemptedAlternatives.push(`Attempt ${attempt}: Designation=none (empty dropdown)`);
-              logger.info({ attempt }, 'Designation dropdown has no options');
+            if (designationOptions.length === 0) {
+              attemptedAlternatives.push(`Attempt ${attempt}: Designation=none (no options available)`);
+              logger.info({ attempt }, 'No designation options available');
+              designationProcessed = true;
+              break;
             }
+
+            // Build exclude list for designation based on previous attempts with same cadastre
+            const previousDesignations: string[] = [];
+            attemptedAlternatives.forEach(alt => {
+              // Extract designation from previous attempts with same cadastre
+              if (alt.includes(`Cadastre="${selectedCadastre}"`) || alt.includes(selectedCadastre)) {
+                const designMatch = alt.match(/Designation="([^"]+)"/);
+                if (designMatch && designMatch[1] !== 'none') {
+                  previousDesignations.push(designMatch[1]);
+                }
+              }
+            });
+
+            logger.info({
+              attempt,
+              selectedCadastre,
+              previousDesignations
+            }, 'Previously tried designations for this cadastre');
+
+            // Use LLM to find best match, excluding previously tried designations
+            logger.info({ attempt }, 'Calling LLM for designation selection');
+
+            const { bestOption, reasoning } = await this.findBestOptionWithLLM(
+              designationOptions,
+              contextString,
+              'designation',
+              previousDesignations, // Exclude previously tried designations for this cadastre
+              attempt
+            );
+
+            if (bestOption) {
+              selectedDesignation = bestOption.text;
+              attemptedAlternatives.push(`Attempt ${attempt}: Designation="${bestOption.text}" (${reasoning})`);
+              logger.info({
+                attempt,
+                selected: bestOption.text,
+                value: bestOption.value,
+                reasoning
+              }, 'Selecting designation based on LLM');
+
+              await designationSelect.selectOption({ value: bestOption.value });
+
+              // Wait for any form updates after designation selection
+              await this.page.waitForTimeout(500);
+            } else {
+              // No match - this is fine, it's optional
+              attemptedAlternatives.push(`Attempt ${attempt}: Designation=none (no match found - ${reasoning})`);
+              logger.info({
+                attempt,
+                reasoning,
+                availableOptions: designationOptions.length
+              }, 'No matching designation found - leaving empty');
+            }
+
+            designationProcessed = true;
+            break;
+
           } catch (designationError) {
-            // Check if it's a page context error
-            const errorMsg = designationError instanceof Error ? designationError.message : 'unknown';
-            if (errorMsg.includes('Cannot find context') || errorMsg.includes('Protocol error')) {
+            const errorMsg = designationError instanceof Error ? designationError.message : String(designationError);
+
+            // If it's a page context error and we have retries left, try again
+            if (designRetry < 3 && (errorMsg.includes('context') || errorMsg.includes('detached'))) {
               logger.warn({
                 attempt,
+                designRetry,
                 error: errorMsg
-              }, 'Page context lost while processing designation - will note as unavailable');
-              attemptedAlternatives.push(`Attempt ${attempt}: Designation=unavailable (page context lost)`);
-            } else {
-              logger.error({
-                attempt,
-                error: errorMsg
-              }, 'Error processing designation secondaire, continuing anyway');
-              attemptedAlternatives.push(`Attempt ${attempt}: Designation=error (${errorMsg})`);
+              }, 'Page context issue during designation, retrying');
+              await this.page.waitForTimeout(1000);
+              continue;
             }
+
+            // Final error handling
+            logger.error({
+              attempt,
+              designRetry,
+              error: errorMsg,
+              selectedCadastre
+            }, 'Error processing designation, continuing without it');
+
+            if (designRetry === 3) {
+              attemptedAlternatives.push(`Attempt ${attempt}: Designation=error (${errorMsg.substring(0, 50)})`);
+            }
+            break;
           }
-        } else {
-          attemptedAlternatives.push(`Attempt ${attempt}: Designation=N/A (dropdown not found)`);
-          logger.info({ attempt }, 'Designation dropdown element not found on page');
         }
 
         // Step 5: Submit form
         logger.info({ attempt }, 'Step 5: Submitting form');
-        const submitBtn = await this.page.$('input[type="submit"], input[value*="Soumettre"]');
-        if (submitBtn) {
-          await submitBtn.click();
-        }
-
-        // Wait for page response and check for errors
-        await this.page.waitForTimeout(3000); // Give more time for page to respond
-
-        // Check for specific error messages
-        let errorElement = null;
-        let errorText = null;
 
         try {
-          // Make sure we're still on a valid page
-          const currentUrl = this.page.url();
-          logger.debug({ attempt, currentUrl }, 'Checking for errors on current page');
+          // Store the current URL before submission to detect navigation
+          const urlBeforeSubmit = this.page.url();
 
-          errorElement = await this.page.$('td.contValErr');
-          if (errorElement) {
-            errorText = await errorElement.textContent();
+          const submitBtn = await this.page.$('input[type="submit"], input[value*="Soumettre"]');
+          if (!submitBtn) {
+            throw new Error('Submit button not found');
           }
-        } catch (e) {
-          // Page context might have changed
-          logger.warn({
-            attempt,
-            error: e instanceof Error ? e.message : e
-          }, 'Failed to check for error element, page context might be lost');
 
-          // If we can't check for errors, assume we need to retry
-          lastError = new Error('Lost page context while checking for errors');
+          // Click the submit button
+          await submitBtn.click();
+
+          // Wait for either navigation or page update
+          // Use race to handle both scenarios
+          await Promise.race([
+            // Wait for navigation to a new page
+            this.page.waitForNavigation({
+              waitUntil: 'domcontentloaded',
+              timeout: 15000
+            }).catch(() => null),
+            // Or wait for the page to update in place
+            this.page.waitForLoadState('networkidle', {
+              timeout: 15000
+            }).catch(() => null),
+            // Or just wait a fixed amount of time
+            this.page.waitForTimeout(5000)
+          ]);
+
+          // Additional wait to ensure page is stable
+          await this.page.waitForTimeout(2000);
+
+          // Check if we navigated
+          const urlAfterSubmit = this.page.url();
+          const didNavigate = urlBeforeSubmit !== urlAfterSubmit;
+
+          logger.info({
+            attempt,
+            didNavigate,
+            urlBefore: urlBeforeSubmit,
+            urlAfter: urlAfterSubmit
+          }, 'Form submitted');
+
+        } catch (submitError) {
+          logger.error({ attempt, error: submitError }, 'Failed to submit form');
+          lastError = submitError as Error;
           continue;
         }
 
-        if (errorText) {
-          // Check for "inexistante" error which means we should try another cadastre
-          if (errorText.includes('inexistante') ||
-              errorText.includes('Aucune information ne correspond')) {
+        // Step 6: Check for errors or success
+        logger.info({ attempt }, 'Step 6: Checking submission result');
+
+        let hasError = false;
+        let errorText = '';
+
+        // Try to check for errors with retries to handle page context issues
+        for (let checkAttempt = 1; checkAttempt <= 3; checkAttempt++) {
+          try {
+            // First, check if the page is accessible
+            const currentUrl = this.page.url();
+            logger.debug({ attempt, checkAttempt, currentUrl }, 'Checking page for errors');
+
+            // Look for error messages - try multiple selectors
+            const errorSelectors = [
+              'td.contValErr',
+              '.contValErr',
+              '.error-message',
+              'div.alert-danger',
+              'span.error',
+              'td:has-text("Aucune information")',
+              'td:has-text("inexistante")'
+            ];
+
+            for (const selector of errorSelectors) {
+              try {
+                // Use waitForSelector with short timeout to check existence
+                const element = await this.page.waitForSelector(selector, {
+                  state: 'attached',
+                  timeout: 1000
+                }).catch(() => null);
+
+                if (element) {
+                  const text = await element.textContent().catch(() => null);
+                  if (text && text.trim()) {
+                    hasError = true;
+                    errorText = text.trim();
+                    logger.info({ attempt, selector, errorText }, 'Found error message');
+                    break;
+                  }
+                }
+              } catch (e) {
+                // Ignore individual selector failures
+              }
+            }
+
+            // If no error found via selectors, check page content
+            if (!hasError) {
+              try {
+                // Use evaluate to safely check page content
+                const hasErrorInContent = await this.page.evaluate(() => {
+                  const bodyText = document.body?.innerText || '';
+                  return bodyText.includes('inexistante') ||
+                         bodyText.includes('Aucune information ne correspond');
+                }).catch(() => false);
+
+                if (hasErrorInContent) {
+                  hasError = true;
+                  errorText = 'Document not found (detected in page content)';
+                  logger.info({ attempt }, 'Detected error in page content');
+                }
+              } catch (e) {
+                logger.debug({ attempt, checkAttempt }, 'Could not check page content');
+              }
+            }
+
+            // If we successfully checked the page, break out of retry loop
+            break;
+
+          } catch (checkError) {
+            const errorMsg = checkError instanceof Error ? checkError.message : String(checkError);
+
+            // If it's a context error and we have more retries, wait and try again
+            if (checkAttempt < 3 && errorMsg.includes('context')) {
+              logger.warn({
+                attempt,
+                checkAttempt,
+                error: errorMsg
+              }, 'Page context issue, retrying error check');
+              await this.page.waitForTimeout(1000);
+              continue;
+            }
 
             logger.warn({
               attempt,
-              errorText,
-              selectedCadastre,
-              attemptedSoFar: attemptedAlternatives
-            }, 'Document not found with this cadastre, will retry');
-
-            // Add this cadastre to failed list (avoid duplicates)
-            if (selectedCadastre && !failedCadastres.includes(selectedCadastre)) {
-              failedCadastres.push(selectedCadastre);
-              logger.info({
-                attempt,
-                failedCadastres,
-                selectedCadastre
-              }, 'Added cadastre to failed list');
-            }
-
-            lastError = new Error(errorText || 'Document not found');
-
-            // Continue to next attempt
-            continue;
+              checkAttempt,
+              error: errorMsg
+            }, 'Could not check for submission errors');
+            break;
           }
-
-          // For other validation errors, throw
-          throw new DataValidationError(
-            `Validation error: ${errorText}`,
-            errorText || undefined
-          );
         }
 
-        // If no error, document should be loading
+        if (hasError && errorText) {
+          logger.warn({
+            attempt,
+            errorText,
+            selectedCadastre,
+            attemptedSoFar: attemptedAlternatives
+          }, 'Submission failed with error');
+
+          // Track failed combination of cadastre+designation (not just cadastre alone)
+          // This allows retrying same cadastre with different designation
+          const failedCombo = selectedDesignation
+            ? `${selectedCadastre}||${selectedDesignation}`
+            : selectedCadastre;
+
+          if (failedCombo && !failedCadastres.includes(failedCombo)) {
+            failedCadastres.push(failedCombo);
+            logger.info({
+              attempt,
+              failedCombination: failedCombo,
+              totalFailed: failedCadastres.length
+            }, 'Tracked failed cadastre+designation combination');
+          }
+
+          lastError = new Error(errorText);
+          continue; // Try next attempt
+        }
+
+        // No error detected, check if document is loading
         logger.info({
           attempt,
           successfulCadastre: selectedCadastre,
           attemptedAlternatives
-        }, 'No validation errors, proceeding with document download');
-        return await this.waitForDocumentAndDownload(config);
+        }, 'No errors detected, checking for document');
+
+        // Try to proceed with download
+        try {
+          return await this.waitForDocumentAndDownload(config);
+        } catch (downloadError) {
+          logger.error({ attempt, error: downloadError }, 'Document download failed');
+          lastError = downloadError as Error;
+
+          // Track failed combination if download failed
+          const failedCombo = selectedDesignation
+            ? `${selectedCadastre}||${selectedDesignation}`
+            : selectedCadastre;
+
+          if (failedCombo && !failedCadastres.includes(failedCombo)) {
+            failedCadastres.push(failedCombo);
+            logger.info({
+              attempt,
+              failedCombination: failedCombo,
+              reason: 'download_failed'
+            }, 'Tracked failed combination after download failure');
+          }
+          continue;
+        }
 
       } catch (error) {
         lastError = error as Error;
