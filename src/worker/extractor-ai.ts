@@ -8,6 +8,7 @@ import fs from 'fs/promises';
 import { findBestSelectOption } from '../utils/fuzzy-matcher';
 import { VisionAnalyzer, PatternBasedAnalyzer } from '../utils/vision-analyzer';
 import { SmartElementFinder } from '../utils/smart-element-finder';
+import { extractSelectOptions, SelectOption } from '../utils/fuzzy-matcher';
 
 export class AIRegistreExtractor {
   private browser: Browser | null = null;
@@ -438,15 +439,287 @@ export class AIRegistreExtractor {
     }
   }
   
+  /**
+   * Helper method to use OpenAI for intelligent dropdown option matching
+   * Considers both cadastre and designation secondaire inputs when finding the best match
+   */
+  private async findBestOptionWithLLM(
+    options: SelectOption[],
+    inputCadastre: string | undefined,
+    inputDesignation: string | undefined,
+    dropdownType: 'cadastre' | 'designation'
+  ): Promise<{ bestOption: SelectOption | null; reasoning: string }> {
+    const openaiKey = process.env.OPENAI_API_KEY;
+
+    if (!openaiKey) {
+      logger.warn('OpenAI API key not configured, falling back to fuzzy matching');
+      return { bestOption: null, reasoning: 'No OpenAI API key' };
+    }
+
+    try {
+      const optionsList = options.map((opt, idx) => `${idx}: "${opt.text}"`).join('\n');
+
+      const prompt = dropdownType === 'cadastre'
+        ? `You are helping match cadastre information from a Quebec land registry form.
+           The user provided:
+           - Cadastre: "${inputCadastre || 'not provided'}"
+           - Désignation secondaire: "${inputDesignation || 'not provided'}"
+
+           Sometimes the cadastre information might be incorrectly split between these two fields,
+           or the cadastre name might be slightly different from the official dropdown options.
+
+           Available cadastre options:
+           ${optionsList}
+
+           Task: Find the best matching cadastre option. Consider that:
+           1. The information might be split incorrectly between cadastre and designation fields
+           2. There might be typos or abbreviations
+           3. The format might differ (e.g., "St" vs "Saint", missing hyphens, etc.)
+           4. If you find "Cadastre du Québec" or similar, it usually maps to index 0 or value "000001"
+
+           Return ONLY a JSON object with:
+           {"index": <number>, "confidence": <"high"|"medium"|"low">, "reasoning": "<brief explanation>"}`
+        : `You are helping match designation secondaire information from a Quebec land registry form.
+           The user provided:
+           - Cadastre: "${inputCadastre || 'not provided'}"
+           - Désignation secondaire: "${inputDesignation || 'not provided'}"
+
+           Sometimes the designation information might be incorrectly placed in the cadastre field.
+
+           Available designation secondaire options:
+           ${optionsList}
+
+           Task: Find the best matching designation option, or determine if no designation is needed.
+           Consider that:
+           1. The information might be in the wrong field
+           2. It's optional - if nothing matches well, it's okay to not select anything
+           3. Look for partial matches or related terms
+
+           Return ONLY a JSON object with:
+           {"index": <number or -1 for none>, "confidence": <"high"|"medium"|"low">, "reasoning": "<brief explanation>"}`;
+
+      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${openaiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'gpt-4o-mini',
+          messages: [
+            {
+              role: 'system',
+              content: 'You are an expert at Quebec land registry data matching. Return only valid JSON.'
+            },
+            {
+              role: 'user',
+              content: prompt
+            }
+          ],
+          temperature: 0.1,
+          max_tokens: 200,
+          response_format: { type: 'json_object' }
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`OpenAI API error: ${response.statusText}`);
+      }
+
+      const data = await response.json() as any;
+      const result = JSON.parse(data.choices[0].message.content);
+
+      logger.info({
+        dropdownType,
+        result,
+        inputCadastre,
+        inputDesignation
+      }, 'LLM matching result');
+
+      if (result.index >= 0 && result.index < options.length) {
+        return {
+          bestOption: options[result.index],
+          reasoning: result.reasoning
+        };
+      }
+
+      return { bestOption: null, reasoning: result.reasoning || 'No match found' };
+
+    } catch (error) {
+      logger.error({ error, dropdownType }, 'LLM matching failed');
+      return { bestOption: null, reasoning: `LLM error: ${error}` };
+    }
+  }
+
+  /**
+   * Fallback extraction method for index when initial attempt fails
+   * Uses intelligent LLM-based matching for cadastre and designation secondaire
+   */
+  private async extractIndexWithFallback(
+    config: ExtractionConfig,
+    attemptedAlternatives: string[] = []
+  ): Promise<string> {
+    logger.info({
+      config,
+      attempt: 'fallback'
+    }, '🔄 Attempting intelligent fallback for index extraction');
+
+    if (!this.page) throw new Error('Page not initialized');
+
+    try {
+      await this.takeDebugScreenshot('index-fallback-start');
+
+      // Navigate back to search form if needed
+      const currentUrl = this.page.url();
+      if (!currentUrl.includes('pf_13_01_11_02_indx_immbl')) {
+        await this.navigateToSearch('index');
+        await this.page.waitForSelector('#selCircnFoncr', { state: 'visible', timeout: 10000 });
+      }
+
+      // Step 1: Select Circonscription (same as before)
+      logger.info('Step 1: Selecting circonscription (unchanged)');
+      const circumscriptionSelect = await this.page.$('#selCircnFoncr');
+      if (circumscriptionSelect) {
+        const currentText = await circumscriptionSelect.evaluate((el: any) =>
+          el.options[el.selectedIndex]?.text?.trim() || ''
+        );
+
+        if (currentText !== config.circumscription) {
+          const bestOption = await findBestSelectOption(circumscriptionSelect, config.circumscription);
+          if (bestOption) {
+            await circumscriptionSelect.selectOption({ value: bestOption.value });
+            await this.page.waitForLoadState('networkidle', { timeout: 30000 });
+            await this.page.waitForSelector('#selCadst', { state: 'visible', timeout: 10000 });
+          }
+        }
+      }
+
+      // Step 2: Intelligent Cadastre Selection
+      logger.info('Step 2: Intelligent cadastre selection using LLM');
+      const cadastreSelect = await this.page.$('#selCadst');
+
+      if (cadastreSelect) {
+        // Get all cadastre options
+        const cadastreOptions = await extractSelectOptions(cadastreSelect);
+        logger.info({
+          optionCount: cadastreOptions.length,
+          firstFive: cadastreOptions.slice(0, 5).map(o => o.text)
+        }, 'Available cadastre options');
+
+        // Use LLM to find best match
+        const { bestOption, reasoning } = await this.findBestOptionWithLLM(
+          cadastreOptions,
+          config.cadastre,
+          config.designation_secondaire,
+          'cadastre'
+        );
+
+        if (bestOption) {
+          attemptedAlternatives.push(`Cadastre: ${bestOption.text} (${reasoning})`);
+          logger.info({
+            selected: bestOption.text,
+            value: bestOption.value,
+            reasoning
+          }, 'Selecting cadastre based on LLM recommendation');
+
+          await cadastreSelect.selectOption({ value: bestOption.value });
+          await this.page.waitForLoadState('networkidle', { timeout: 30000 });
+        } else {
+          // Fallback to original if LLM fails
+          logger.warn('LLM could not find cadastre match, trying original value');
+          if (config.cadastre) {
+            const fallbackOption = await findBestSelectOption(cadastreSelect, config.cadastre);
+            if (fallbackOption) {
+              attemptedAlternatives.push(`Cadastre: ${fallbackOption.text} (fuzzy match)`);
+              await cadastreSelect.selectOption({ value: fallbackOption.value });
+              await this.page.waitForLoadState('networkidle', { timeout: 30000 });
+            }
+          }
+        }
+      }
+
+      // Step 3: Fill lot number (unchanged)
+      logger.info('Step 3: Filling lot number');
+      const lotNumberInput = await this.page.$('#txtNumrtLot');
+      if (lotNumberInput) {
+        await lotNumberInput.fill('');
+        const lotNumberNoSpaces = config.lot_number?.replace(/\s+/g, '') || '';
+        await lotNumberInput.fill(lotNumberNoSpaces);
+      }
+
+      // Step 4: Intelligent Designation Secondaire Selection
+      logger.info('Step 4: Intelligent designation secondaire selection');
+      const designationSelect = await this.page.$('#selDesgnSecnd');
+
+      if (designationSelect) {
+        // Get all designation options
+        const designationOptions = await extractSelectOptions(designationSelect);
+        logger.info({
+          optionCount: designationOptions.length,
+          options: designationOptions.map(o => o.text)
+        }, 'Available designation secondaire options');
+
+        // Use LLM to find best match (considering it's optional)
+        const { bestOption, reasoning } = await this.findBestOptionWithLLM(
+          designationOptions,
+          config.cadastre,
+          config.designation_secondaire,
+          'designation'
+        );
+
+        if (bestOption) {
+          attemptedAlternatives.push(`Designation: ${bestOption.text} (${reasoning})`);
+          logger.info({
+            selected: bestOption.text,
+            value: bestOption.value,
+            reasoning
+          }, 'Selecting designation based on LLM recommendation');
+
+          await designationSelect.selectOption({ value: bestOption.value });
+        } else {
+          logger.info('No designation secondaire match found (field is optional)');
+          attemptedAlternatives.push('Designation: none (optional field)');
+        }
+      }
+
+      // Step 5: Submit form
+      logger.info('Step 5: Submitting form');
+      const submitBtn = await this.page.$('input[type="submit"], button[type="submit"], input[value*="Soumettre"]');
+      if (submitBtn) {
+        await submitBtn.click();
+      }
+
+      // Check for errors
+      await this.checkForDataValidationErrors('index');
+
+      // If we got here, extraction should proceed normally
+      logger.info('Fallback successful, proceeding with document download');
+      return await this.waitForDocumentAndDownload(config);
+
+    } catch (error) {
+      // Add attempted alternatives to error message
+      const enhancedError = new Error(
+        `${error instanceof Error ? error.message : 'Unknown error'}\n` +
+        `Attempted alternatives: ${attemptedAlternatives.join('; ')}`
+      );
+      logger.error({
+        error: enhancedError,
+        attemptedAlternatives,
+        config
+      }, 'Fallback extraction failed');
+      throw enhancedError;
+    }
+  }
+
   private async extractIndex(config: ExtractionConfig): Promise<string> {
     if (!this.page || !this.agentQLPage) {
       throw new Error('Page not initialized');
     }
-    
+
     try {
       // Since we know the exact IDs and structure, let's use direct selectors for reliability
       logger.info('Using hybrid approach: AI for discovery, direct selectors for interaction');
-      
+
       // First ensure we're on the right page
       await this.page.waitForSelector('#selCircnFoncr', { state: 'visible', timeout: 10000 });
       
@@ -588,12 +861,27 @@ export class AIRegistreExtractor {
       // Wait for document load and download - use the same working logic as actes
       return await this.waitForDocumentAndDownload(config);
     } catch (error) {
-      logger.error({ 
+      // Check if this is the specific validation error we want to handle with fallback
+      if (error instanceof DataValidationError &&
+          error.message.includes('Aucune information ne correspond aux critères de sélection')) {
+
+        logger.info({
+          error: error.message,
+          config
+        }, '⚠️ No matching information found, triggering intelligent fallback');
+
+        // Try the intelligent fallback approach
+        const attemptedAlternatives: string[] = [];
+        return await this.extractIndexWithFallback(config, attemptedAlternatives);
+      }
+
+      // For other errors, throw as before
+      logger.error({
         error: error instanceof Error ? error.message : error,
         workerId: this.workerId,
-        config 
+        config
       }, 'AI index extraction failed');
-      
+
       throw error;
     }
   }

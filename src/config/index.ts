@@ -20,6 +20,7 @@ const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   AGENTQL_API_KEY: z.string().optional(),
   USE_AI_EXTRACTOR: z.string().transform(val => val === 'true').default('true'),
+  OPENAI_API_KEY: z.string().optional(),
 });
 
 const env = envSchema.parse(process.env);
@@ -58,4 +59,7 @@ export const config = {
     apiKey: env.AGENTQL_API_KEY,
   },
   useAIExtractor: env.USE_AI_EXTRACTOR,
+  openai: {
+    apiKey: env.OPENAI_API_KEY,
+  },
 };
