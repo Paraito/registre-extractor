@@ -466,8 +466,9 @@ export class AIRegistreExtractor {
         logger.warn({
           dropdownType,
           excludeOptions,
-          totalOptions: options.length
-        }, 'No options left after filtering excludes');
+          totalOptions: options.length,
+          allOptions: options.map(o => o.text)
+        }, 'No options left after filtering excludes - all have been tried');
         return { bestOption: null, reasoning: 'All options have been tried and failed' };
       }
 
@@ -638,9 +639,14 @@ export class AIRegistreExtractor {
 
         // Wait for page to be fully ready
         await this.page.waitForTimeout(2000); // Give page time to stabilize
-        await this.page.waitForSelector('#selCircnFoncr', { state: 'visible', timeout: 10000 });
 
-        logger.info({ attempt }, 'Page reloaded and ready');
+        try {
+          await this.page.waitForSelector('#selCircnFoncr', { state: 'visible', timeout: 10000 });
+          logger.info({ attempt }, 'Page reloaded and ready');
+        } catch (waitError) {
+          logger.error({ attempt, error: waitError }, 'Failed to wait for page elements after reload');
+          throw new Error('Page failed to load properly after navigation');
+        }
 
         // Step 1: Select Circonscription (same for all attempts)
         logger.info('Step 1: Selecting circonscription');
@@ -760,7 +766,12 @@ export class AIRegistreExtractor {
         // Wait for designation dropdown to update after cadastre selection
         await this.page.waitForTimeout(2000);
 
-        const designationSelect = await this.page.$('#selDesgnSecnd');
+        let designationSelect = null;
+        try {
+          designationSelect = await this.page.$('#selDesgnSecnd');
+        } catch (e) {
+          logger.warn({ attempt, error: e }, 'Failed to query designation dropdown');
+        }
 
         if (designationSelect) {
           try {
@@ -813,12 +824,21 @@ export class AIRegistreExtractor {
               logger.info({ attempt }, 'Designation dropdown has no options');
             }
           } catch (designationError) {
-            // Log error but don't fail - designation is optional
-            logger.error({
-              attempt,
-              error: designationError instanceof Error ? designationError.message : designationError
-            }, 'Error processing designation secondaire, continuing anyway');
-            attemptedAlternatives.push(`Attempt ${attempt}: Designation=error (${designationError instanceof Error ? designationError.message : 'unknown'})`);
+            // Check if it's a page context error
+            const errorMsg = designationError instanceof Error ? designationError.message : 'unknown';
+            if (errorMsg.includes('Cannot find context') || errorMsg.includes('Protocol error')) {
+              logger.warn({
+                attempt,
+                error: errorMsg
+              }, 'Page context lost while processing designation - will note as unavailable');
+              attemptedAlternatives.push(`Attempt ${attempt}: Designation=unavailable (page context lost)`);
+            } else {
+              logger.error({
+                attempt,
+                error: errorMsg
+              }, 'Error processing designation secondaire, continuing anyway');
+              attemptedAlternatives.push(`Attempt ${attempt}: Designation=error (${errorMsg})`);
+            }
           }
         } else {
           attemptedAlternatives.push(`Attempt ${attempt}: Designation=N/A (dropdown not found)`);
@@ -875,6 +895,11 @@ export class AIRegistreExtractor {
             // Add this cadastre to failed list (avoid duplicates)
             if (selectedCadastre && !failedCadastres.includes(selectedCadastre)) {
               failedCadastres.push(selectedCadastre);
+              logger.info({
+                attempt,
+                failedCadastres,
+                selectedCadastre
+              }, 'Added cadastre to failed list');
             }
 
             lastError = new Error(errorText || 'Document not found');
@@ -919,8 +944,8 @@ export class AIRegistreExtractor {
           }, 'Page context lost, will retry with fresh navigation on next attempt');
         }
 
-        // If this was the last attempt, throw the error with all attempted alternatives
-        if (attempt === maxAttempts) {
+        // Always check if we've reached max attempts before continuing
+        if (attempt >= maxAttempts) {
           const detailedError = new Error(
             `All ${maxAttempts} attempts failed.\n` +
             `Last error: ${lastError?.message || 'Unknown error'}\n` +
