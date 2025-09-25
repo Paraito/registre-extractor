@@ -458,8 +458,19 @@ export class AIRegistreExtractor {
     }
 
     try {
-      const optionsList = options
-        .filter(opt => !excludeOptions.includes(opt.text))
+      // Filter out excluded options
+      const filteredOptions = options.filter(opt => !excludeOptions.includes(opt.text));
+
+      if (filteredOptions.length === 0) {
+        logger.warn({
+          dropdownType,
+          excludeOptions,
+          totalOptions: options.length
+        }, 'No options left after filtering excludes');
+        return { bestOption: null, reasoning: 'All options have been tried and failed' };
+      }
+
+      const optionsList = filteredOptions
         .map((opt, idx) => `${idx}: "${opt.text}"`)
         .join('\n');
 
@@ -554,19 +565,16 @@ export class AIRegistreExtractor {
         matchedOption: result.index >= 0 ? options.filter(opt => !excludeOptions.includes(opt.text))[result.index]?.text : 'none'
       }, 'LLM matching result');
 
-      // Adjust index for filtered options
-      if (result.index >= 0) {
-        const filteredOptions = options.filter(opt => !excludeOptions.includes(opt.text));
-        if (result.index < filteredOptions.length) {
-          const selectedOption = filteredOptions[result.index];
-          // Find the original index
-          const originalIndex = options.findIndex(opt => opt.text === selectedOption.text);
-          if (originalIndex >= 0) {
-            return {
-              bestOption: options[originalIndex],
-              reasoning: result.reasoning
-            };
-          }
+      // Adjust index for filtered options (we already have filteredOptions from above)
+      if (result.index >= 0 && result.index < filteredOptions.length) {
+        const selectedOption = filteredOptions[result.index];
+        // Find the original index in unfiltered options
+        const originalIndex = options.findIndex(opt => opt.text === selectedOption.text);
+        if (originalIndex >= 0) {
+          return {
+            bestOption: options[originalIndex],
+            reasoning: result.reasoning
+          };
         }
       }
 
@@ -613,11 +621,10 @@ export class AIRegistreExtractor {
         logger.info({ attempt, maxAttempts }, `Fallback attempt ${attempt}/${maxAttempts}`);
         await this.takeDebugScreenshot(`index-fallback-attempt-${attempt}`);
 
-        // Navigate back to search form for retry
-        const currentUrl = this.page.url();
-        if (!currentUrl.includes('pf_13_01_11_02_indx_immbl')) {
-          await this.navigateToSearch('index');
-        }
+        // Always navigate back to search form for each retry to ensure clean state
+        logger.info({ attempt }, 'Navigating to search form for retry');
+        await this.navigateToSearch('index');
+        await this.page.waitForTimeout(1000); // Give page time to stabilize
         await this.page.waitForSelector('#selCircnFoncr', { state: 'visible', timeout: 10000 });
 
         // Step 1: Select Circonscription (same for all attempts)
@@ -647,9 +654,13 @@ export class AIRegistreExtractor {
           // Get all cadastre options
           const cadastreOptions = await extractSelectOptions(cadastreSelect);
 
-          // First attempt: Usually try "Cadastre du Québec" if it's in the original config
-          // Subsequent attempts: Exclude failed cadastres
+          // Build exclude list - all previously failed cadastres
           let excludeList = [...failedCadastres];
+          logger.info({
+            attempt,
+            excludeList,
+            failedCadastres
+          }, 'Exclude list for this attempt');
 
           // Log available options for debugging
           logger.info({
@@ -753,28 +764,34 @@ export class AIRegistreExtractor {
             firstFive: designationOptions.slice(0, 5).map(o => o.text)
           }, 'Available designation options after cadastre selection');
 
-          // Pass selected cadastre as context
-          const { bestOption, reasoning } = await this.findBestOptionWithLLM(
-            designationOptions,
-            contextString,
-            'designation',
-            [selectedCadastre], // Pass selected cadastre as context
-            attempt
-          );
+          // Only try designation if we have options
+          if (designationOptions.length > 0) {
+            // Pass selected cadastre as context
+            const { bestOption, reasoning } = await this.findBestOptionWithLLM(
+              designationOptions,
+              contextString,
+              'designation',
+              [selectedCadastre], // Pass selected cadastre as context
+              attempt
+            );
 
-          if (bestOption) {
-            attemptedAlternatives.push(`Attempt ${attempt}: Designation="${bestOption.text}" (${reasoning})`);
-            logger.info({
-              attempt,
-              selected: bestOption.text,
-              value: bestOption.value,
-              reasoning
-            }, 'Selecting designation based on LLM');
+            if (bestOption) {
+              attemptedAlternatives.push(`Attempt ${attempt}: Designation="${bestOption.text}" (${reasoning})`);
+              logger.info({
+                attempt,
+                selected: bestOption.text,
+                value: bestOption.value,
+                reasoning
+              }, 'Selecting designation based on LLM');
 
-            await designationSelect.selectOption({ value: bestOption.value });
+              await designationSelect.selectOption({ value: bestOption.value });
+            } else {
+              attemptedAlternatives.push(`Attempt ${attempt}: Designation=none (optional/no match found)`);
+              logger.info({ attempt, contextString }, 'No designation match found - leaving empty (optional field)');
+            }
           } else {
-            attemptedAlternatives.push(`Attempt ${attempt}: Designation=none (optional/no match)`);
-            logger.info({ attempt }, 'No designation match found - leaving empty (optional field)');
+            attemptedAlternatives.push(`Attempt ${attempt}: Designation=none (no options available)`);
+            logger.info({ attempt }, 'No designation options available');
           }
         } else {
           attemptedAlternatives.push(`Attempt ${attempt}: Designation=N/A (dropdown not present)`);
@@ -792,22 +809,33 @@ export class AIRegistreExtractor {
         await this.page.waitForTimeout(2000);
 
         // Check for specific error messages
-        const errorElement = await this.page.$('td.contValErr');
-        if (errorElement) {
-          const errorText = await errorElement.textContent();
+        let errorElement = null;
+        let errorText = null;
 
+        try {
+          errorElement = await this.page.$('td.contValErr');
+          if (errorElement) {
+            errorText = await errorElement.textContent();
+          }
+        } catch (e) {
+          // Page context might have changed, try to re-query
+          logger.warn({ error: e }, 'Failed to check for error element, page might have navigated');
+        }
+
+        if (errorText) {
           // Check for "inexistante" error which means we should try another cadastre
-          if (errorText?.includes('inexistante') ||
-              errorText?.includes('Aucune information ne correspond')) {
+          if (errorText.includes('inexistante') ||
+              errorText.includes('Aucune information ne correspond')) {
 
             logger.warn({
               attempt,
               errorText,
-              selectedCadastre
+              selectedCadastre,
+              attemptedSoFar: attemptedAlternatives
             }, 'Document not found with this cadastre, will retry');
 
-            // Add this cadastre to failed list
-            if (selectedCadastre) {
+            // Add this cadastre to failed list (avoid duplicates)
+            if (selectedCadastre && !failedCadastres.includes(selectedCadastre)) {
               failedCadastres.push(selectedCadastre);
             }
 
@@ -825,7 +853,11 @@ export class AIRegistreExtractor {
         }
 
         // If no error, document should be loading
-        logger.info({ attempt }, 'No validation errors, proceeding with document download');
+        logger.info({
+          attempt,
+          successfulCadastre: selectedCadastre,
+          attemptedAlternatives
+        }, 'No validation errors, proceeding with document download');
         return await this.waitForDocumentAndDownload(config);
 
       } catch (error) {
@@ -833,8 +865,16 @@ export class AIRegistreExtractor {
         logger.error({
           attempt,
           error: error instanceof Error ? error.message : error,
-          failedCadastres
+          failedCadastres,
+          attemptedAlternatives
         }, `Attempt ${attempt} failed`);
+
+        // If it's a page navigation error, try to recover
+        if (error instanceof Error &&
+            (error.message.includes('Cannot find context') ||
+             error.message.includes('Protocol error'))) {
+          logger.warn({ attempt }, 'Page context lost, will retry with fresh navigation');
+        }
 
         // If this was the last attempt, throw the error with all attempted alternatives
         if (attempt === maxAttempts) {
