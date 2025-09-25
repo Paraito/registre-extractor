@@ -790,7 +790,11 @@ export class AIRegistreExtractor {
             logger.debug({ attempt, designRetry }, 'Attempting to process designation dropdown');
 
             // Check if page is still accessible
-            await this.page.evaluate(() => document.body).catch(() => {
+            await this.page.evaluate(() => {
+              // This runs in browser context where document exists
+              const doc = (globalThis as any).document;
+              return doc?.body || null;
+            }).catch(() => {
               logger.warn({ attempt, designRetry }, 'Page context lost, waiting for stability');
               return null;
             });
@@ -1014,7 +1018,9 @@ export class AIRegistreExtractor {
               try {
                 // Use evaluate to safely check page content
                 const hasErrorInContent = await this.page.evaluate(() => {
-                  const bodyText = document.body?.innerText || '';
+                  // This runs in browser context where document exists
+                  const doc = (globalThis as any).document;
+                  const bodyText = doc?.body?.innerText || '';
                   return bodyText.includes('inexistante') ||
                          bodyText.includes('Aucune information ne correspond');
                 }).catch(() => false);
