@@ -161,10 +161,40 @@ export class IndexFallbackHandler {
 
     // Get all options
     const options = await this.extractSelectOptions(select);
-    const bestMatch = this.findBestMatch(options, this.config.circumscription);
+
+    // First try simple fuzzy match
+    let bestMatch = this.findBestMatch(options, this.config.circumscription);
+
+    // If no match and we have LLM, try intelligent matching
+    if (!bestMatch && this.openaiApiKey) {
+      logger.info('No direct match for circonscription, trying LLM');
+
+      const contextString = this.createContextString();
+      const llmMatch = await this.findBestOptionWithLLM(
+        options,
+        contextString,
+        'circonscription' as any, // We're extending the type here
+        [],
+        1
+      );
+
+      if (llmMatch) {
+        bestMatch = options.find(o => o.value === llmMatch.value) || null;
+        logger.info({
+          selected: llmMatch.text,
+          reasoning: llmMatch.reasoning
+        }, 'LLM found circonscription match');
+      }
+    }
 
     if (!bestMatch) {
-      throw new Error(`No matching circonscription found for: ${this.config.circumscription}`);
+      // Log available options for debugging
+      logger.error({
+        target: this.config.circumscription,
+        availableOptions: options.map(o => o.text)
+      }, 'No matching circonscription found');
+
+      throw new Error(`No matching circonscription found for: ${this.config.circumscription}. Available: ${options.map(o => o.text).join(', ')}`);
     }
 
     await select.selectOption({ value: bestMatch.value });
@@ -379,16 +409,20 @@ export class IndexFallbackHandler {
   private async findBestOptionWithLLM(
     options: SelectOption[],
     contextString: string,
-    dropdownType: 'cadastre' | 'designation',
+    dropdownType: 'cadastre' | 'designation' | 'circonscription',
     excludeOptions: string[],
     _attemptNumber: number
   ): Promise<{ text: string; value: string; reasoning: string } | null> {
 
     if (!this.openaiApiKey) {
       // Fallback to simple fuzzy matching
-      const target = dropdownType === 'cadastre' ? this.config.cadastre : this.config.designation_secondaire;
+      let target = '';
+      if (dropdownType === 'cadastre') target = this.config.cadastre || '';
+      else if (dropdownType === 'designation') target = this.config.designation_secondaire || '';
+      else if (dropdownType === 'circonscription') target = this.config.circumscription || '';
+
       const filtered = options.filter(o => !excludeOptions.includes(o.text));
-      const match = this.findBestMatch(filtered, target || '');
+      const match = this.findBestMatch(filtered, target);
       return match ? { ...match, reasoning: 'fuzzy match' } : null;
     }
 
@@ -404,8 +438,21 @@ export class IndexFallbackHandler {
         .map((opt, idx) => `${idx}: "${opt.text}"`)
         .join('\n');
 
-      const prompt = dropdownType === 'cadastre'
-        ? `Context: "${contextString}"
+      let prompt = '';
+
+      if (dropdownType === 'circonscription') {
+        prompt = `Context: "${contextString}"
+           Format: [document_number, circonscription, cadastre, designation_secondaire]
+
+           Available options:
+           ${optionsList}
+
+           Find the BEST matching circonscription option. Look for city/municipality names.
+           Handle variations like "St-" vs "Saint-", accents, etc.
+
+           Return JSON: {"index": <number>, "reasoning": "<why>", "matched_text": "<from context>"}`;
+      } else if (dropdownType === 'cadastre') {
+        prompt = `Context: "${contextString}"
            Format: [document_number, circonscription, cadastre, designation_secondaire]
 
            Available options:
@@ -417,8 +464,10 @@ export class IndexFallbackHandler {
            - Village/City names
            - Match anywhere in the context string
 
-           Return JSON: {"index": <number>, "reasoning": "<why>", "matched_text": "<from context>"}`
-        : `Context: "${contextString}"
+           Return JSON: {"index": <number>, "reasoning": "<why>", "matched_text": "<from context>"}`;
+      } else {
+        // designation
+        prompt = `Context: "${contextString}"
            Format: [document_number, circonscription, cadastre, designation_secondaire]
 
            Available options:
@@ -427,6 +476,7 @@ export class IndexFallbackHandler {
            Find the BEST matching designation option or return null if none match.
 
            Return JSON: {"index": <number or null>, "reasoning": "<why>"}`;
+      }
 
       // Call OpenAI API
       const response = await fetch('https://api.openai.com/v1/chat/completions', {

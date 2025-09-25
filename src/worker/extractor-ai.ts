@@ -1313,15 +1313,32 @@ export class AIRegistreExtractor {
       // Wait for document load and download - use the same working logic as actes
       return await this.waitForDocumentAndDownload(config);
     } catch (error) {
-      // Check if this is a validation error that should trigger fallback
-      if (error instanceof DataValidationError &&
-          (error.message.includes('Aucune information ne correspond aux critères de sélection') ||
-           error.message.includes('inexistante'))) {
+      // Check if this is an error that should trigger the intelligent fallback
+      const errorMessage = error instanceof Error ? error.message : String(error);
 
+      // Trigger fallback for:
+      // 1. Validation errors (document not found after submission)
+      // 2. Mismatch errors (couldn't find matching dropdown options)
+      const shouldTriggerFallback = (
+        // Validation errors from form submission
+        (error instanceof DataValidationError &&
+          (errorMessage.includes('Aucune information ne correspond aux critères de sélection') ||
+           errorMessage.includes('inexistante'))) ||
+        // Mismatch errors for any field
+        errorMessage.includes('Could not find matching option for circumscription') ||
+        errorMessage.includes('Could not find matching option for cadastre') ||
+        errorMessage.includes('Could not find matching option for designation') ||
+        // Generic mismatch patterns
+        errorMessage.includes('Could not find matching option') ||
+        errorMessage.includes('No matching') ||
+        errorMessage.includes('not found')
+      );
+
+      if (shouldTriggerFallback) {
         logger.info({
-          error: error.message,
+          error: errorMessage,
           config
-        }, '⚠️ Document not found with provided criteria, starting intelligent fallback');
+        }, '⚠️ Document/option mismatch detected, starting intelligent fallback');
 
         // Use the new clean fallback handler
         const fallbackHandler = new IndexFallbackHandler(
