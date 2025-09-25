@@ -467,27 +467,31 @@ export class AIRegistreExtractor {
         ? `You are helping match cadastre information from a Quebec land registry form.
 
            Complete search context: "${contextString}"
-
-           This string contains: document_number, circonscription_foncière, cadastre, désignation_secondaire
+           This string format is: [document_number, circonscription, cadastre, designation_secondaire]
 
            Attempt #${attemptNumber}
-           ${excludeOptions.length > 0 ? `Previously tried (FAILED - do not select these): ${excludeOptions.join(', ')}` : ''}
+           ${excludeOptions.length > 0 ? `\nPREVIOUSLY FAILED (DO NOT SELECT): ${excludeOptions.join(', ')}` : ''}
 
-           Available cadastre options:
+           Available cadastre options (index: "name"):
            ${optionsList}
 
-           Task: Find the best matching cadastre option from the context string.
+           TASK: Find the BEST matching cadastre from the context string.
 
-           Important rules:
-           1. Look for cadastre names within the entire context string
-           2. The cadastre might be in the "désignation secondaire" part
-           3. Match patterns like "Paroisse de Saint-Hippolyte" if it appears in context
-           4. Consider abbreviations (St vs Saint, etc.)
-           5. If "Cadastre du Québec" failed on attempt 1, look for parish/canton names
-           6. NEVER select options that are in the exclude list
+           CRITICAL RULES:
+           1. If attempt > 1 and "Cadastre du Québec" failed, look for parish/canton names in the context
+           2. Search for cadastre patterns ANYWHERE in the context string, including in the designation part
+           3. Common patterns to match:
+              - "Paroisse de [Name]" → match "Paroisse de [Name]"
+              - "Canton de [Name]" → match "Canton de [Name]"
+              - "Village de [Name]" → match "Village de [Name]"
+              - "Ville de [Name]" → match "Ville de [Name]"
+           4. Handle variations: "Saint-Hippolyte" = "St-Hippolyte" = "Saint Hippolyte"
+           5. Example: if context has "Rang 5 Canton Abercrombie Paroisse de Saint-Hippolyte",
+              you should match option "Paroisse de Saint-Hippolyte"
+           6. NEVER select excluded options
 
-           Return ONLY a JSON object with:
-           {"index": <number>, "confidence": <"high"|"medium"|"low">, "reasoning": "<brief explanation>", "matched_text": "<the part of context that matched>"}`
+           Return ONLY valid JSON:
+           {"index": <number>, "confidence": <"high"|"medium"|"low">, "reasoning": "<why this matches>", "matched_text": "<exact text from context>"}`
         : `You are helping match designation secondaire information from a Quebec land registry form.
 
            Complete search context: "${contextString}"
@@ -515,7 +519,7 @@ export class AIRegistreExtractor {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          model: 'gpt-4o-mini',
+          model: 'gpt-4o',  // Using more capable model for better matching
           messages: [
             {
               role: 'system',
@@ -539,12 +543,15 @@ export class AIRegistreExtractor {
       const data = await response.json() as any;
       const result = JSON.parse(data.choices[0].message.content);
 
+      // Enhanced logging for debugging
       logger.info({
         dropdownType,
         attemptNumber,
         result,
         contextString,
-        excludeOptions
+        excludeOptions,
+        availableOptionsCount: options.filter(opt => !excludeOptions.includes(opt.text)).length,
+        matchedOption: result.index >= 0 ? options.filter(opt => !excludeOptions.includes(opt.text))[result.index]?.text : 'none'
       }, 'LLM matching result');
 
       // Adjust index for filtered options
@@ -644,6 +651,14 @@ export class AIRegistreExtractor {
           // Subsequent attempts: Exclude failed cadastres
           let excludeList = [...failedCadastres];
 
+          // Log available options for debugging
+          logger.info({
+            attempt,
+            availableOptions: cadastreOptions.map(o => o.text),
+            contextString,
+            excludeList
+          }, 'Cadastre options and context for LLM');
+
           // Special handling for first attempt
           if (attempt === 1 && config.cadastre?.toLowerCase().includes('québec')) {
             // Try Cadastre du Québec first
@@ -656,6 +671,25 @@ export class AIRegistreExtractor {
               logger.info({ selected: quebecOption.text }, 'Trying Cadastre du Québec first');
               await cadastreSelect.selectOption({ value: quebecOption.value });
               await this.page.waitForLoadState('networkidle', { timeout: 30000 });
+            } else {
+              // If Cadastre du Québec not found, use LLM
+              logger.warn('Cadastre du Québec not found, using LLM for attempt 1');
+              const { bestOption, reasoning } = await this.findBestOptionWithLLM(
+                cadastreOptions,
+                contextString,
+                'cadastre',
+                excludeList,
+                attempt
+              );
+
+              if (bestOption) {
+                selectedCadastre = bestOption.text;
+                attemptedAlternatives.push(`Attempt ${attempt}: Cadastre="${bestOption.text}" (${reasoning})`);
+                await cadastreSelect.selectOption({ value: bestOption.value });
+                await this.page.waitForLoadState('networkidle', { timeout: 30000 });
+              } else {
+                throw new Error(`No valid cadastre option found for attempt ${attempt}`);
+              }
             }
           } else {
             // Use LLM for intelligent matching
@@ -680,7 +714,16 @@ export class AIRegistreExtractor {
               await cadastreSelect.selectOption({ value: bestOption.value });
               await this.page.waitForLoadState('networkidle', { timeout: 30000 });
             } else {
-              throw new Error(`No valid cadastre option found for attempt ${attempt}`);
+              // Log why LLM couldn't find a match
+              logger.error({
+                attempt,
+                contextString,
+                excludeList,
+                availableOptionsCount: cadastreOptions.length,
+                reasoning
+              }, 'LLM could not find valid cadastre match');
+              attemptedAlternatives.push(`Attempt ${attempt}: Cadastre=FAILED (${reasoning || 'no match found'})`);
+              throw new Error(`No valid cadastre option found for attempt ${attempt}: ${reasoning}`);
             }
           }
         }
@@ -695,7 +738,7 @@ export class AIRegistreExtractor {
         }
 
         // Step 4: Intelligent Designation Secondaire (based on selected cadastre)
-        logger.info('Step 4: Selecting designation secondaire');
+        logger.info({ selectedCadastre }, 'Step 4: Selecting designation secondaire');
         const designationSelect = await this.page.$('#selDesgnSecnd');
 
         if (designationSelect) {
@@ -731,8 +774,11 @@ export class AIRegistreExtractor {
             await designationSelect.selectOption({ value: bestOption.value });
           } else {
             attemptedAlternatives.push(`Attempt ${attempt}: Designation=none (optional/no match)`);
-            logger.info({ attempt }, 'No designation match found');
+            logger.info({ attempt }, 'No designation match found - leaving empty (optional field)');
           }
+        } else {
+          attemptedAlternatives.push(`Attempt ${attempt}: Designation=N/A (dropdown not present)`);
+          logger.info({ attempt }, 'Designation dropdown not present on page');
         }
 
         // Step 5: Submit form
