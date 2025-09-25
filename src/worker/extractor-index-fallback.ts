@@ -63,7 +63,7 @@ export class IndexFallbackHandler {
         const hasError = await this.checkForErrors();
 
         if (!hasError) {
-          // Success!
+          // Success! Document is loading or loaded
           this.attempts.push({
             attemptNumber: attemptNum,
             cadastre: cadastreSelected.text,
@@ -75,9 +75,13 @@ export class IndexFallbackHandler {
           logger.info({
             attemptNum,
             cadastre: cadastreSelected.text,
-            designation: designationSelected?.text
-          }, 'Fallback attempt successful');
+            designation: designationSelected?.text,
+            url: this.page.url()
+          }, '✅ Fallback attempt successful - form submitted, no errors detected');
 
+          // IMPORTANT: Don't do anything else here!
+          // The page is now in the correct state for the document to load
+          // The calling code will handle waitForDocumentAndDownload
           return; // Success, exit
         }
 
@@ -291,16 +295,29 @@ export class IndexFallbackHandler {
     const submitBtn = await this.page.$('input[type="submit"], input[value*="Soumettre"]');
     if (!submitBtn) throw new Error('Submit button not found');
 
+    // Click submit and wait for response
     await submitBtn.click();
 
-    // Wait for page to load/update
+    // Wait for page to process the submission
+    // We use multiple strategies to handle different response scenarios:
+    // 1. Navigation to a new page (document found)
+    // 2. Page update with error message (document not found)
+    // 3. Timeout fallback
     await Promise.race([
-      this.page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => null),
-      this.page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => null),
+      this.page.waitForNavigation({
+        waitUntil: 'domcontentloaded',
+        timeout: 15000
+      }).catch(() => null),
+      this.page.waitForLoadState('networkidle', {
+        timeout: 15000
+      }).catch(() => null),
       this.page.waitForTimeout(5000)
     ]);
 
+    // Additional wait to ensure page is stable
     await this.page.waitForTimeout(2000);
+
+    logger.info({ url: this.page.url() }, 'Form submitted, page loaded');
   }
 
   /**

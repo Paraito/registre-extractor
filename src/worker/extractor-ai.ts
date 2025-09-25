@@ -1332,10 +1332,28 @@ export class AIRegistreExtractor {
 
         try {
           await fallbackHandler.executeWithRetries(3);
-          // If we get here, fallback succeeded - proceed with download
+
+          // If we get here, fallback succeeded!
+          // The form was submitted successfully and no errors were detected
+          // The page is now in the same state as after a successful regular submission
+
+          logger.info({
+            workerId: this.workerId,
+            config
+          }, '✅ Fallback successful, proceeding with document download');
+
+          // Continue with the EXACT SAME flow as regular extraction:
+          // Wait for document to load and download it
           return await this.waitForDocumentAndDownload(config);
+
         } catch (fallbackError) {
-          // Fallback failed - throw the detailed error
+          // Fallback failed after all attempts - throw the detailed error
+          logger.error({
+            error: fallbackError instanceof Error ? fallbackError.message : fallbackError,
+            workerId: this.workerId,
+            config
+          }, '❌ All fallback attempts failed');
+
           throw fallbackError;
         }
       }
