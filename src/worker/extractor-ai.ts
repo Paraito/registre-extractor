@@ -9,6 +9,7 @@ import { findBestSelectOption } from '../utils/fuzzy-matcher';
 import { VisionAnalyzer, PatternBasedAnalyzer } from '../utils/vision-analyzer';
 import { SmartElementFinder } from '../utils/smart-element-finder';
 import { extractSelectOptions, SelectOption } from '../utils/fuzzy-matcher';
+import { IndexFallbackHandler } from './extractor-index-fallback';
 
 export class AIRegistreExtractor {
   private browser: Browser | null = null;
@@ -441,10 +442,10 @@ export class AIRegistreExtractor {
   }
   
   /**
-   * Helper method to use OpenAI for intelligent dropdown option matching
-   * Uses a complete context string with all available information
+   * OLD METHOD - REPLACED BY IndexFallbackHandler
+   * Keeping temporarily for reference
    */
-  private async findBestOptionWithLLM(
+  private async findBestOptionWithLLM_OLD(
     options: SelectOption[],
     contextString: string,
     dropdownType: 'cadastre' | 'designation',
@@ -589,10 +590,12 @@ export class AIRegistreExtractor {
   }
 
   /**
-   * Fallback extraction method with sequential retry logic
-   * Tries multiple cadastre options intelligently based on context
+   * OLD METHOD - REPLACED BY IndexFallbackHandler
+   * Keeping temporarily for reference
+   * @deprecated
    */
-  private async extractIndexWithFallback(
+  // @ts-ignore - kept for reference
+  private async extractIndexWithFallback_OLD(
     config: ExtractionConfig,
     attemptedAlternatives: string[] = [],
     maxAttempts: number = 3
@@ -726,7 +729,7 @@ export class AIRegistreExtractor {
           // If no Quebec option or not attempt 1, use LLM
           if (!cadastreToSelect) {
             logger.info({ attempt }, 'Using LLM for cadastre selection');
-            const { bestOption, reasoning } = await this.findBestOptionWithLLM(
+            const { bestOption, reasoning } = await this.findBestOptionWithLLM_OLD(
               cadastreOptions,
               contextString,
               'cadastre',
@@ -852,7 +855,7 @@ export class AIRegistreExtractor {
             // Use LLM to find best match, excluding previously tried designations
             logger.info({ attempt }, 'Calling LLM for designation selection');
 
-            const { bestOption, reasoning } = await this.findBestOptionWithLLM(
+            const { bestOption, reasoning } = await this.findBestOptionWithLLM_OLD(
               designationOptions,
               contextString,
               'designation',
@@ -1320,9 +1323,21 @@ export class AIRegistreExtractor {
           config
         }, '⚠️ Document not found with provided criteria, starting intelligent fallback');
 
-        // Try the intelligent fallback approach with retry logic
-        const attemptedAlternatives: string[] = [];
-        return await this.extractIndexWithFallback(config, attemptedAlternatives, 3);
+        // Use the new clean fallback handler
+        const fallbackHandler = new IndexFallbackHandler(
+          this.page!,
+          config,
+          process.env.OPENAI_API_KEY
+        );
+
+        try {
+          await fallbackHandler.executeWithRetries(3);
+          // If we get here, fallback succeeded - proceed with download
+          return await this.waitForDocumentAndDownload(config);
+        } catch (fallbackError) {
+          // Fallback failed - throw the detailed error
+          throw fallbackError;
+        }
       }
 
       // For other errors, throw as before
