@@ -441,13 +441,14 @@ export class AIRegistreExtractor {
   
   /**
    * Helper method to use OpenAI for intelligent dropdown option matching
-   * Considers both cadastre and designation secondaire inputs when finding the best match
+   * Uses a complete context string with all available information
    */
   private async findBestOptionWithLLM(
     options: SelectOption[],
-    inputCadastre: string | undefined,
-    inputDesignation: string | undefined,
-    dropdownType: 'cadastre' | 'designation'
+    contextString: string,
+    dropdownType: 'cadastre' | 'designation',
+    excludeOptions: string[] = [],
+    attemptNumber: number = 1
   ): Promise<{ bestOption: SelectOption | null; reasoning: string }> {
     const openaiKey = process.env.OPENAI_API_KEY;
 
@@ -457,46 +458,55 @@ export class AIRegistreExtractor {
     }
 
     try {
-      const optionsList = options.map((opt, idx) => `${idx}: "${opt.text}"`).join('\n');
+      const optionsList = options
+        .filter(opt => !excludeOptions.includes(opt.text))
+        .map((opt, idx) => `${idx}: "${opt.text}"`)
+        .join('\n');
 
       const prompt = dropdownType === 'cadastre'
         ? `You are helping match cadastre information from a Quebec land registry form.
-           The user provided:
-           - Cadastre: "${inputCadastre || 'not provided'}"
-           - Désignation secondaire: "${inputDesignation || 'not provided'}"
 
-           Sometimes the cadastre information might be incorrectly split between these two fields,
-           or the cadastre name might be slightly different from the official dropdown options.
+           Complete search context: "${contextString}"
+
+           This string contains: document_number, circonscription_foncière, cadastre, désignation_secondaire
+
+           Attempt #${attemptNumber}
+           ${excludeOptions.length > 0 ? `Previously tried (FAILED - do not select these): ${excludeOptions.join(', ')}` : ''}
 
            Available cadastre options:
            ${optionsList}
 
-           Task: Find the best matching cadastre option. Consider that:
-           1. The information might be split incorrectly between cadastre and designation fields
-           2. There might be typos or abbreviations
-           3. The format might differ (e.g., "St" vs "Saint", missing hyphens, etc.)
-           4. If you find "Cadastre du Québec" or similar, it usually maps to index 0 or value "000001"
+           Task: Find the best matching cadastre option from the context string.
+
+           Important rules:
+           1. Look for cadastre names within the entire context string
+           2. The cadastre might be in the "désignation secondaire" part
+           3. Match patterns like "Paroisse de Saint-Hippolyte" if it appears in context
+           4. Consider abbreviations (St vs Saint, etc.)
+           5. If "Cadastre du Québec" failed on attempt 1, look for parish/canton names
+           6. NEVER select options that are in the exclude list
 
            Return ONLY a JSON object with:
-           {"index": <number>, "confidence": <"high"|"medium"|"low">, "reasoning": "<brief explanation>"}`
+           {"index": <number>, "confidence": <"high"|"medium"|"low">, "reasoning": "<brief explanation>", "matched_text": "<the part of context that matched>"}`
         : `You are helping match designation secondaire information from a Quebec land registry form.
-           The user provided:
-           - Cadastre: "${inputCadastre || 'not provided'}"
-           - Désignation secondaire: "${inputDesignation || 'not provided'}"
 
-           Sometimes the designation information might be incorrectly placed in the cadastre field.
+           Complete search context: "${contextString}"
+           Selected cadastre: "${excludeOptions[0] || 'not yet selected'}"
 
            Available designation secondaire options:
            ${optionsList}
 
-           Task: Find the best matching designation option, or determine if no designation is needed.
-           Consider that:
-           1. The information might be in the wrong field
-           2. It's optional - if nothing matches well, it's okay to not select anything
-           3. Look for partial matches or related terms
+           Task: Find the best matching designation option from the context string.
+
+           Important rules:
+           1. Look for Rang/Canton patterns in the context
+           2. The designation must complement the selected cadastre
+           3. Common patterns: "Rang X Canton Y"
+           4. This field is OPTIONAL - only select if there's a clear match
+           5. If nothing matches well, return index -1
 
            Return ONLY a JSON object with:
-           {"index": <number or -1 for none>, "confidence": <"high"|"medium"|"low">, "reasoning": "<brief explanation>"}`;
+           {"index": <number or -1>, "confidence": <"high"|"medium"|"low">, "reasoning": "<brief explanation>", "matched_text": "<the part that matched or 'none'>"}`;
 
       const response = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
@@ -517,7 +527,7 @@ export class AIRegistreExtractor {
             }
           ],
           temperature: 0.1,
-          max_tokens: 200,
+          max_tokens: 250,
           response_format: { type: 'json_object' }
         }),
       });
@@ -531,16 +541,26 @@ export class AIRegistreExtractor {
 
       logger.info({
         dropdownType,
+        attemptNumber,
         result,
-        inputCadastre,
-        inputDesignation
+        contextString,
+        excludeOptions
       }, 'LLM matching result');
 
-      if (result.index >= 0 && result.index < options.length) {
-        return {
-          bestOption: options[result.index],
-          reasoning: result.reasoning
-        };
+      // Adjust index for filtered options
+      if (result.index >= 0) {
+        const filteredOptions = options.filter(opt => !excludeOptions.includes(opt.text));
+        if (result.index < filteredOptions.length) {
+          const selectedOption = filteredOptions[result.index];
+          // Find the original index
+          const originalIndex = options.findIndex(opt => opt.text === selectedOption.text);
+          if (originalIndex >= 0) {
+            return {
+              bestOption: options[originalIndex],
+              reasoning: result.reasoning
+            };
+          }
+        }
       }
 
       return { bestOption: null, reasoning: result.reasoning || 'No match found' };
@@ -552,163 +572,241 @@ export class AIRegistreExtractor {
   }
 
   /**
-   * Fallback extraction method for index when initial attempt fails
-   * Uses intelligent LLM-based matching for cadastre and designation secondaire
+   * Fallback extraction method with sequential retry logic
+   * Tries multiple cadastre options intelligently based on context
    */
   private async extractIndexWithFallback(
     config: ExtractionConfig,
-    attemptedAlternatives: string[] = []
+    attemptedAlternatives: string[] = [],
+    maxAttempts: number = 3
   ): Promise<string> {
     logger.info({
       config,
       attempt: 'fallback'
-    }, '🔄 Attempting intelligent fallback for index extraction');
+    }, '🔄 Starting intelligent fallback for index extraction');
 
     if (!this.page) throw new Error('Page not initialized');
 
-    try {
-      await this.takeDebugScreenshot('index-fallback-start');
+    // Build context string for LLM
+    const contextString = [
+      config.lot_number || '',
+      config.circumscription || '',
+      config.cadastre || '',
+      config.designation_secondaire || ''
+    ].filter(s => s).join(', ');
 
-      // Navigate back to search form if needed
-      const currentUrl = this.page.url();
-      if (!currentUrl.includes('pf_13_01_11_02_indx_immbl')) {
-        await this.navigateToSearch('index');
-        await this.page.waitForSelector('#selCircnFoncr', { state: 'visible', timeout: 10000 });
-      }
+    logger.info({ contextString }, 'Search context string for matching');
 
-      // Step 1: Select Circonscription (same as before)
-      logger.info('Step 1: Selecting circonscription (unchanged)');
-      const circumscriptionSelect = await this.page.$('#selCircnFoncr');
-      if (circumscriptionSelect) {
-        const currentText = await circumscriptionSelect.evaluate((el: any) =>
-          el.options[el.selectedIndex]?.text?.trim() || ''
-        );
+    const failedCadastres: string[] = [];
+    let lastError: Error | null = null;
 
-        if (currentText !== config.circumscription) {
-          const bestOption = await findBestSelectOption(circumscriptionSelect, config.circumscription);
-          if (bestOption) {
-            await circumscriptionSelect.selectOption({ value: bestOption.value });
-            await this.page.waitForLoadState('networkidle', { timeout: 30000 });
-            await this.page.waitForSelector('#selCadst', { state: 'visible', timeout: 10000 });
-          }
+    // Try up to maxAttempts times with different cadastre selections
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        logger.info({ attempt, maxAttempts }, `Fallback attempt ${attempt}/${maxAttempts}`);
+        await this.takeDebugScreenshot(`index-fallback-attempt-${attempt}`);
+
+        // Navigate back to search form for retry
+        const currentUrl = this.page.url();
+        if (!currentUrl.includes('pf_13_01_11_02_indx_immbl')) {
+          await this.navigateToSearch('index');
         }
-      }
+        await this.page.waitForSelector('#selCircnFoncr', { state: 'visible', timeout: 10000 });
 
-      // Step 2: Intelligent Cadastre Selection
-      logger.info('Step 2: Intelligent cadastre selection using LLM');
-      const cadastreSelect = await this.page.$('#selCadst');
+        // Step 1: Select Circonscription (same for all attempts)
+        logger.info('Step 1: Selecting circonscription');
+        const circumscriptionSelect = await this.page.$('#selCircnFoncr');
+        if (circumscriptionSelect) {
+          const currentText = await circumscriptionSelect.evaluate((el: any) =>
+            el.options[el.selectedIndex]?.text?.trim() || ''
+          );
 
-      if (cadastreSelect) {
-        // Get all cadastre options
-        const cadastreOptions = await extractSelectOptions(cadastreSelect);
-        logger.info({
-          optionCount: cadastreOptions.length,
-          firstFive: cadastreOptions.slice(0, 5).map(o => o.text)
-        }, 'Available cadastre options');
-
-        // Use LLM to find best match
-        const { bestOption, reasoning } = await this.findBestOptionWithLLM(
-          cadastreOptions,
-          config.cadastre,
-          config.designation_secondaire,
-          'cadastre'
-        );
-
-        if (bestOption) {
-          attemptedAlternatives.push(`Cadastre: ${bestOption.text} (${reasoning})`);
-          logger.info({
-            selected: bestOption.text,
-            value: bestOption.value,
-            reasoning
-          }, 'Selecting cadastre based on LLM recommendation');
-
-          await cadastreSelect.selectOption({ value: bestOption.value });
-          await this.page.waitForLoadState('networkidle', { timeout: 30000 });
-        } else {
-          // Fallback to original if LLM fails
-          logger.warn('LLM could not find cadastre match, trying original value');
-          if (config.cadastre) {
-            const fallbackOption = await findBestSelectOption(cadastreSelect, config.cadastre);
-            if (fallbackOption) {
-              attemptedAlternatives.push(`Cadastre: ${fallbackOption.text} (fuzzy match)`);
-              await cadastreSelect.selectOption({ value: fallbackOption.value });
+          if (currentText !== config.circumscription) {
+            const bestOption = await findBestSelectOption(circumscriptionSelect, config.circumscription);
+            if (bestOption) {
+              await circumscriptionSelect.selectOption({ value: bestOption.value });
               await this.page.waitForLoadState('networkidle', { timeout: 30000 });
+              await this.page.waitForSelector('#selCadst', { state: 'visible', timeout: 10000 });
             }
           }
         }
-      }
 
-      // Step 3: Fill lot number (unchanged)
-      logger.info('Step 3: Filling lot number');
-      const lotNumberInput = await this.page.$('#txtNumrtLot');
-      if (lotNumberInput) {
-        await lotNumberInput.fill('');
-        const lotNumberNoSpaces = config.lot_number?.replace(/\s+/g, '') || '';
-        await lotNumberInput.fill(lotNumberNoSpaces);
-      }
+        // Step 2: Intelligent Cadastre Selection (excluding failed ones)
+        logger.info({ attempt, failedCadastres }, 'Step 2: Selecting cadastre with LLM');
+        const cadastreSelect = await this.page.$('#selCadst');
+        let selectedCadastre = '';
 
-      // Step 4: Intelligent Designation Secondaire Selection
-      logger.info('Step 4: Intelligent designation secondaire selection');
-      const designationSelect = await this.page.$('#selDesgnSecnd');
+        if (cadastreSelect) {
+          // Get all cadastre options
+          const cadastreOptions = await extractSelectOptions(cadastreSelect);
 
-      if (designationSelect) {
-        // Get all designation options
-        const designationOptions = await extractSelectOptions(designationSelect);
-        logger.info({
-          optionCount: designationOptions.length,
-          options: designationOptions.map(o => o.text)
-        }, 'Available designation secondaire options');
+          // First attempt: Usually try "Cadastre du Québec" if it's in the original config
+          // Subsequent attempts: Exclude failed cadastres
+          let excludeList = [...failedCadastres];
 
-        // Use LLM to find best match (considering it's optional)
-        const { bestOption, reasoning } = await this.findBestOptionWithLLM(
-          designationOptions,
-          config.cadastre,
-          config.designation_secondaire,
-          'designation'
-        );
+          // Special handling for first attempt
+          if (attempt === 1 && config.cadastre?.toLowerCase().includes('québec')) {
+            // Try Cadastre du Québec first
+            const quebecOption = cadastreOptions.find(opt =>
+              opt.text.toLowerCase().includes('québec') || opt.value === '000001'
+            );
+            if (quebecOption) {
+              selectedCadastre = quebecOption.text;
+              attemptedAlternatives.push(`Attempt ${attempt}: Cadastre="${quebecOption.text}" (default Cadastre du Québec)`);
+              logger.info({ selected: quebecOption.text }, 'Trying Cadastre du Québec first');
+              await cadastreSelect.selectOption({ value: quebecOption.value });
+              await this.page.waitForLoadState('networkidle', { timeout: 30000 });
+            }
+          } else {
+            // Use LLM for intelligent matching
+            const { bestOption, reasoning } = await this.findBestOptionWithLLM(
+              cadastreOptions,
+              contextString,
+              'cadastre',
+              excludeList,
+              attempt
+            );
 
-        if (bestOption) {
-          attemptedAlternatives.push(`Designation: ${bestOption.text} (${reasoning})`);
+            if (bestOption) {
+              selectedCadastre = bestOption.text;
+              attemptedAlternatives.push(`Attempt ${attempt}: Cadastre="${bestOption.text}" (${reasoning})`);
+              logger.info({
+                attempt,
+                selected: bestOption.text,
+                value: bestOption.value,
+                reasoning
+              }, 'Selecting cadastre based on LLM');
+
+              await cadastreSelect.selectOption({ value: bestOption.value });
+              await this.page.waitForLoadState('networkidle', { timeout: 30000 });
+            } else {
+              throw new Error(`No valid cadastre option found for attempt ${attempt}`);
+            }
+          }
+        }
+
+        // Step 3: Fill lot number
+        logger.info('Step 3: Filling lot number');
+        const lotNumberInput = await this.page.$('#txtNumrtLot');
+        if (lotNumberInput) {
+          await lotNumberInput.fill('');
+          const lotNumberNoSpaces = config.lot_number?.replace(/\s+/g, '') || '';
+          await lotNumberInput.fill(lotNumberNoSpaces);
+        }
+
+        // Step 4: Intelligent Designation Secondaire (based on selected cadastre)
+        logger.info('Step 4: Selecting designation secondaire');
+        const designationSelect = await this.page.$('#selDesgnSecnd');
+
+        if (designationSelect) {
+          // Wait for options to update after cadastre selection
+          await this.page.waitForTimeout(1000);
+
+          const designationOptions = await extractSelectOptions(designationSelect);
           logger.info({
-            selected: bestOption.text,
-            value: bestOption.value,
-            reasoning
-          }, 'Selecting designation based on LLM recommendation');
+            attempt,
+            selectedCadastre,
+            optionCount: designationOptions.length,
+            firstFive: designationOptions.slice(0, 5).map(o => o.text)
+          }, 'Available designation options after cadastre selection');
 
-          await designationSelect.selectOption({ value: bestOption.value });
-        } else {
-          logger.info('No designation secondaire match found (field is optional)');
-          attemptedAlternatives.push('Designation: none (optional field)');
+          // Pass selected cadastre as context
+          const { bestOption, reasoning } = await this.findBestOptionWithLLM(
+            designationOptions,
+            contextString,
+            'designation',
+            [selectedCadastre], // Pass selected cadastre as context
+            attempt
+          );
+
+          if (bestOption) {
+            attemptedAlternatives.push(`Attempt ${attempt}: Designation="${bestOption.text}" (${reasoning})`);
+            logger.info({
+              attempt,
+              selected: bestOption.text,
+              value: bestOption.value,
+              reasoning
+            }, 'Selecting designation based on LLM');
+
+            await designationSelect.selectOption({ value: bestOption.value });
+          } else {
+            attemptedAlternatives.push(`Attempt ${attempt}: Designation=none (optional/no match)`);
+            logger.info({ attempt }, 'No designation match found');
+          }
+        }
+
+        // Step 5: Submit form
+        logger.info({ attempt }, 'Step 5: Submitting form');
+        const submitBtn = await this.page.$('input[type="submit"], input[value*="Soumettre"]');
+        if (submitBtn) {
+          await submitBtn.click();
+        }
+
+        // Wait and check for errors
+        await this.page.waitForTimeout(2000);
+
+        // Check for specific error messages
+        const errorElement = await this.page.$('td.contValErr');
+        if (errorElement) {
+          const errorText = await errorElement.textContent();
+
+          // Check for "inexistante" error which means we should try another cadastre
+          if (errorText?.includes('inexistante') ||
+              errorText?.includes('Aucune information ne correspond')) {
+
+            logger.warn({
+              attempt,
+              errorText,
+              selectedCadastre
+            }, 'Document not found with this cadastre, will retry');
+
+            // Add this cadastre to failed list
+            if (selectedCadastre) {
+              failedCadastres.push(selectedCadastre);
+            }
+
+            lastError = new Error(errorText || 'Document not found');
+
+            // Continue to next attempt
+            continue;
+          }
+
+          // For other validation errors, throw
+          throw new DataValidationError(
+            `Validation error: ${errorText}`,
+            errorText || undefined
+          );
+        }
+
+        // If no error, document should be loading
+        logger.info({ attempt }, 'No validation errors, proceeding with document download');
+        return await this.waitForDocumentAndDownload(config);
+
+      } catch (error) {
+        lastError = error as Error;
+        logger.error({
+          attempt,
+          error: error instanceof Error ? error.message : error,
+          failedCadastres
+        }, `Attempt ${attempt} failed`);
+
+        // If this was the last attempt, throw the error with all attempted alternatives
+        if (attempt === maxAttempts) {
+          const detailedError = new Error(
+            `All ${maxAttempts} attempts failed.\n` +
+            `Last error: ${lastError?.message || 'Unknown error'}\n` +
+            `Attempted alternatives:\n${attemptedAlternatives.join('\n')}`
+          );
+          throw detailedError;
         }
       }
-
-      // Step 5: Submit form
-      logger.info('Step 5: Submitting form');
-      const submitBtn = await this.page.$('input[type="submit"], button[type="submit"], input[value*="Soumettre"]');
-      if (submitBtn) {
-        await submitBtn.click();
-      }
-
-      // Check for errors
-      await this.checkForDataValidationErrors('index');
-
-      // If we got here, extraction should proceed normally
-      logger.info('Fallback successful, proceeding with document download');
-      return await this.waitForDocumentAndDownload(config);
-
-    } catch (error) {
-      // Add attempted alternatives to error message
-      const enhancedError = new Error(
-        `${error instanceof Error ? error.message : 'Unknown error'}\n` +
-        `Attempted alternatives: ${attemptedAlternatives.join('; ')}`
-      );
-      logger.error({
-        error: enhancedError,
-        attemptedAlternatives,
-        config
-      }, 'Fallback extraction failed');
-      throw enhancedError;
     }
+
+    // Should not reach here, but just in case
+    throw new Error(
+      `Fallback failed after ${maxAttempts} attempts.\n` +
+      `Attempted alternatives:\n${attemptedAlternatives.join('\n')}`
+    );
   }
 
   private async extractIndex(config: ExtractionConfig): Promise<string> {
@@ -861,18 +959,19 @@ export class AIRegistreExtractor {
       // Wait for document load and download - use the same working logic as actes
       return await this.waitForDocumentAndDownload(config);
     } catch (error) {
-      // Check if this is the specific validation error we want to handle with fallback
+      // Check if this is a validation error that should trigger fallback
       if (error instanceof DataValidationError &&
-          error.message.includes('Aucune information ne correspond aux critères de sélection')) {
+          (error.message.includes('Aucune information ne correspond aux critères de sélection') ||
+           error.message.includes('inexistante'))) {
 
         logger.info({
           error: error.message,
           config
-        }, '⚠️ No matching information found, triggering intelligent fallback');
+        }, '⚠️ Document not found with provided criteria, starting intelligent fallback');
 
-        // Try the intelligent fallback approach
+        // Try the intelligent fallback approach with retry logic
         const attemptedAlternatives: string[] = [];
-        return await this.extractIndexWithFallback(config, attemptedAlternatives);
+        return await this.extractIndexWithFallback(config, attemptedAlternatives, 3);
       }
 
       // For other errors, throw as before
