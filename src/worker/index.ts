@@ -1,11 +1,16 @@
 import { AIRegistreExtractor as RegistreExtractor } from './extractor-ai';
-import { supabase } from '../utils/supabase';
+import { supabase, supabaseManager, EnvironmentName } from '../utils/supabase';
 import { logger } from '../utils/logger';
 import { config } from '../config';
 import { ExtractionQueueJob, WorkerAccount, WorkerStatus, EXTRACTION_STATUS } from '../types';
 import { v4 as uuidv4 } from 'uuid';
 import fs from 'fs/promises';
 import { convertToExtractionConfig } from '../queue/manager';
+
+// Extend ExtractionQueueJob to track which environment it came from
+interface ExtractionQueueJobWithEnv extends ExtractionQueueJob {
+  _environment: EnvironmentName;
+}
 
 export class ExtractionWorker {
   private workerId: string;
@@ -17,6 +22,7 @@ export class ExtractionWorker {
   private shouldStop: boolean = false;
   private lastJobTime: number = Date.now();
   private idleTimeoutMs: number = 2 * 60 * 1000; // 2 minutes of idle time before closing browser
+  private currentJobEnvironment: EnvironmentName | null = null; // Track which environment current job is from
 
   constructor(workerId?: string) {
     this.workerId = workerId || `worker-${uuidv4()}`;
@@ -33,23 +39,37 @@ export class ExtractionWorker {
 
   async initialize(): Promise<void> {
     try {
+      // Log available environments
+      const environments = supabaseManager.getAvailableEnvironments();
+      logger.info({
+        workerId: this.workerId,
+        environments: environments.join(', ') || 'none'
+      }, 'Worker starting with environments');
+
+      if (environments.length === 0) {
+        throw new Error('No Supabase environments configured. Please set up environment credentials in .env');
+      }
+
       // Register worker in database
       await this.registerWorker();
-      
+
       // Start heartbeat
       this.startHeartbeat();
-      
+
       // Get an account
       this.currentAccount = await this.getAvailableAccount();
       this.workerStatus.account_id = this.currentAccount.id;
-      
+
       // Don't initialize extractor here - do it on demand
-      logger.info({ workerId: this.workerId, account: this.currentAccount.username }, 
-        'Worker registered and ready');
-      
+      logger.info({
+        workerId: this.workerId,
+        account: this.currentAccount.username,
+        environments: environments.join(', ')
+      }, 'Worker registered and ready');
+
       // Start continuous job processing
       this.processContinuously();
-      
+
     } catch (error) {
       logger.error({ error, workerId: this.workerId }, 'Failed to initialize worker');
       throw error;
@@ -200,71 +220,108 @@ export class ExtractionWorker {
     }
   }
 
-  private async getNextJob(): Promise<ExtractionQueueJob | null> {
+  private async getNextJob(): Promise<ExtractionQueueJobWithEnv | null> {
     // Set worker to idle while looking for jobs
     this.workerStatus.status = 'idle';
-    
-    // First, check for stale jobs (stuck in processing for more than 5 minutes)
+
+    // Get all available environments
+    const environments = supabaseManager.getAvailableEnvironments();
+
+    if (environments.length === 0) {
+      logger.error('No Supabase environments configured');
+      return null;
+    }
+
+    // Check for stale jobs and reset them in all environments
     const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
-    const { data: staleJobs } = await supabase
-      .from('extraction_queue')
-      .select('*')
-      .eq('status_id', EXTRACTION_STATUS.EN_TRAITEMENT)
-      .lt('processing_started_at', fiveMinutesAgo)
-      .limit(1);
-    
-    if (staleJobs && staleJobs.length > 0) {
-      // Reset stale job
-      await supabase
+
+    for (const env of environments) {
+      const client = supabaseManager.getServiceClient(env);
+      if (!client) continue;
+
+      const { data: staleJobs } = await client
+        .from('extraction_queue')
+        .select('*')
+        .eq('status_id', EXTRACTION_STATUS.EN_TRAITEMENT)
+        .lt('processing_started_at', fiveMinutesAgo)
+        .limit(1);
+
+      if (staleJobs && staleJobs.length > 0) {
+        await client
+          .from('extraction_queue')
+          .update({
+            status_id: EXTRACTION_STATUS.EN_ATTENTE,
+            worker_id: null,
+            processing_started_at: null,
+          })
+          .eq('id', staleJobs[0].id);
+
+        logger.warn({ jobId: staleJobs[0].id, environment: env }, 'Reset stale job');
+      }
+    }
+
+    // Poll all environments for pending jobs
+    for (const env of environments) {
+      const client = supabaseManager.getServiceClient(env);
+      if (!client) continue;
+
+      const { data, error } = await client
+        .from('extraction_queue')
+        .select('*')
+        .eq('status_id', EXTRACTION_STATUS.EN_ATTENTE)
+        .order('created_at', { ascending: true })
+        .limit(1);
+
+      if (error || !data || data.length === 0) {
+        continue; // Try next environment
+      }
+
+      const job = data[0];
+
+      // Try to claim the job by updating it to "En traitement"
+      const { data: claimedJob, error: claimError } = await client
         .from('extraction_queue')
         .update({
-          status_id: EXTRACTION_STATUS.EN_ATTENTE,
-          worker_id: null,
-          processing_started_at: null,
+          status_id: EXTRACTION_STATUS.EN_TRAITEMENT,
+          worker_id: this.workerId,
+          processing_started_at: new Date().toISOString(),
         })
-        .eq('id', staleJobs[0].id);
-      
-      logger.warn({ jobId: staleJobs[0].id }, 'Reset stale job');
-    }
-    
-    const { data, error } = await supabase
-      .from('extraction_queue')
-      .select('*')
-      .eq('status_id', EXTRACTION_STATUS.EN_ATTENTE)
-      .order('created_at', { ascending: true })
-      .limit(1);
+        .eq('id', job.id)
+        .eq('status_id', EXTRACTION_STATUS.EN_ATTENTE) // Ensure it's still available
+        .select()
+        .single();
 
-    if (error || !data || data.length === 0) {
-      return null;
-    }
+      if (claimError || !claimedJob) {
+        // Another worker probably claimed it, try next environment
+        continue;
+      }
 
-    const job = data[0];
-    
-    // Try to claim the job by updating it to "En traitement"
-    const { data: claimedJob, error: claimError } = await supabase
-      .from('extraction_queue')
-      .update({
-        status_id: EXTRACTION_STATUS.EN_TRAITEMENT,
-        worker_id: this.workerId,
-        processing_started_at: new Date().toISOString(),
-      })
-      .eq('id', job.id)
-      .eq('status_id', EXTRACTION_STATUS.EN_ATTENTE) // Ensure it's still available
-      .select()
-      .single();
+      // Successfully claimed a job - add environment metadata
+      logger.info({ jobId: claimedJob.id, environment: env }, 'Claimed job from environment');
 
-    if (claimError || !claimedJob) {
-      // Another worker probably claimed it
-      return null;
+      return {
+        ...claimedJob,
+        _environment: env,
+      };
     }
 
-    return claimedJob;
+    // No jobs available in any environment
+    return null;
   }
 
-  private async processJob(job: ExtractionQueueJob): Promise<void> {
-    logger.info({ 
-      jobId: job.id, 
+  private async processJob(job: ExtractionQueueJobWithEnv): Promise<void> {
+    const environment = job._environment;
+    const client = supabaseManager.getServiceClient(environment);
+
+    if (!client) {
+      logger.error({ jobId: job.id, environment }, 'No Supabase client for environment');
+      return;
+    }
+
+    logger.info({
+      jobId: job.id,
       workerId: this.workerId,
+      environment,
       documentSource: job.document_source,
       documentNumber: job.document_number
     }, 'Processing job');
@@ -272,7 +329,8 @@ export class ExtractionWorker {
     this.isProcessing = true;
     this.workerStatus.status = 'busy';
     this.workerStatus.current_job_id = job.id;
-    
+    this.currentJobEnvironment = environment;
+
     try {
       if (!this.extractor) {
         throw new Error('Extractor not initialized');
@@ -292,8 +350,8 @@ export class ExtractionWorker {
       const fileContent = await fs.readFile(localFilePath);
       
       const storagePath = `${fileName}`;
-      
-      const { error: uploadError } = await supabase.storage
+
+      const { error: uploadError } = await client.storage
         .from(bucketName)
         .upload(storagePath, fileContent, {
           contentType: 'application/pdf',
@@ -305,12 +363,12 @@ export class ExtractionWorker {
       }
 
       // Get public URL
-      const { data: { publicUrl } } = supabase.storage
+      const { data: { publicUrl } } = client.storage
         .from(bucketName)
         .getPublicUrl(storagePath);
 
       // Update job as completed
-      await supabase
+      await client
         .from('extraction_queue')
         .update({
           status_id: EXTRACTION_STATUS.COMPLETE,
@@ -324,10 +382,11 @@ export class ExtractionWorker {
       
       // Update worker stats
       this.workerStatus.jobs_completed++;
-      
-      logger.info({ 
-        jobId: job.id, 
+
+      logger.info({
+        jobId: job.id,
         workerId: this.workerId,
+        environment,
         documentUrl: publicUrl,
         bucketName,
         fileName
@@ -352,12 +411,13 @@ export class ExtractionWorker {
       
       if (isWorkerUnavailable) {
         // Worker/browser issue - release the job back to queue without marking as error
-        logger.warn({ 
-          jobId: job.id, 
-          workerId: this.workerId 
+        logger.warn({
+          jobId: job.id,
+          workerId: this.workerId,
+          environment
         }, 'Worker unavailable, releasing job back to queue');
-        
-        await supabase
+
+        await client
           .from('extraction_queue')
           .update({
             status_id: EXTRACTION_STATUS.EN_ATTENTE,
@@ -367,16 +427,16 @@ export class ExtractionWorker {
             error_message: `Worker unavailable: ${error instanceof Error ? error.message : 'Unknown error'}`
           })
           .eq('id', job.id);
-          
+
         // Don't count this as a failed job
         return;
       }
-      
+
       // For actual extraction errors, use the retry logic
       const attempts = (job.attemtps || 0) + 1;
       const maxAttempts = job.max_attempts || 3;
-      
-      await supabase
+
+      await client
         .from('extraction_queue')
         .update({
           status_id: attempts >= maxAttempts ? EXTRACTION_STATUS.ERREUR : EXTRACTION_STATUS.EN_ATTENTE,
@@ -400,6 +460,7 @@ export class ExtractionWorker {
       this.isProcessing = false;
       this.workerStatus.status = 'idle';
       this.workerStatus.current_job_id = undefined;
+      this.currentJobEnvironment = null;
     }
   }
 
@@ -434,26 +495,31 @@ export class ExtractionWorker {
 
   async shutdown(): Promise<void> {
     logger.info({ workerId: this.workerId }, 'Shutting down worker');
-    
+
     this.shouldStop = true;
-    
+
     // If currently processing a job, release it back to queue
-    if (this.isProcessing && this.workerStatus.current_job_id) {
-      logger.info({ 
-        jobId: this.workerStatus.current_job_id,
-        workerId: this.workerId 
-      }, 'Releasing current job back to queue due to shutdown');
-      
-      await supabase
-        .from('extraction_queue')
-        .update({
-          status_id: EXTRACTION_STATUS.EN_ATTENTE,
-          worker_id: null,
-          processing_started_at: null,
-          error_message: 'Worker shutdown - job released'
-        })
-        .eq('id', this.workerStatus.current_job_id)
-        .eq('worker_id', this.workerId); // Only update if we still own it
+    if (this.isProcessing && this.workerStatus.current_job_id && this.currentJobEnvironment) {
+      const client = supabaseManager.getServiceClient(this.currentJobEnvironment);
+
+      if (client) {
+        logger.info({
+          jobId: this.workerStatus.current_job_id,
+          workerId: this.workerId,
+          environment: this.currentJobEnvironment
+        }, 'Releasing current job back to queue due to shutdown');
+
+        await client
+          .from('extraction_queue')
+          .update({
+            status_id: EXTRACTION_STATUS.EN_ATTENTE,
+            worker_id: null,
+            processing_started_at: null,
+            error_message: 'Worker shutdown - job released'
+          })
+          .eq('id', this.workerStatus.current_job_id)
+          .eq('worker_id', this.workerId); // Only update if we still own it
+      }
     }
     
     // Wait a moment for the update to complete

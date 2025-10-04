@@ -4,9 +4,24 @@ import { z } from 'zod';
 dotenv.config();
 
 const envSchema = z.object({
-  SUPABASE_URL: z.string().url(),
-  SUPABASE_ANON_KEY: z.string().min(1),
-  SUPABASE_SERVICE_KEY: z.string().min(1),
+  // Legacy single-environment config (for backward compatibility)
+  SUPABASE_URL: z.string().url().optional(),
+  SUPABASE_ANON_KEY: z.string().min(1).optional(),
+  SUPABASE_SERVICE_KEY: z.string().min(1).optional(),
+
+  // Multi-environment configs
+  PROD_SUPABASE_URL: z.string().url().optional(),
+  PROD_SUPABASE_ANON_KEY: z.string().optional(),
+  PROD_SUPABASE_SERVICE_KEY: z.string().optional(),
+
+  STAGING_SUPABASE_URL: z.string().url().optional(),
+  STAGING_SUPABASE_ANON_KEY: z.string().optional(),
+  STAGING_SUPABASE_SERVICE_KEY: z.string().optional(),
+
+  DEV_SUPABASE_URL: z.string().url().optional(),
+  DEV_SUPABASE_ANON_KEY: z.string().optional(),
+  DEV_SUPABASE_SERVICE_KEY: z.string().optional(),
+
   API_PORT: z.string().transform(Number).default('3000'),
   API_HOST: z.string().default('0.0.0.0'),
   REDIS_HOST: z.string().default('localhost'),
@@ -25,12 +40,57 @@ const envSchema = z.object({
 
 const env = envSchema.parse(process.env);
 
+// Helper to check if environment credentials are available
+const hasEnvironmentConfig = (prefix: 'PROD' | 'STAGING' | 'DEV') => {
+  const url = env[`${prefix}_SUPABASE_URL`];
+  const anonKey = env[`${prefix}_SUPABASE_ANON_KEY`];
+  const serviceKey = env[`${prefix}_SUPABASE_SERVICE_KEY`];
+  return !!(url && anonKey && serviceKey);
+};
+
+// Build environment configs
+const environments: Record<string, { url: string; anonKey: string; serviceKey: string } | null> = {
+  prod: hasEnvironmentConfig('PROD')
+    ? {
+        url: env.PROD_SUPABASE_URL!,
+        anonKey: env.PROD_SUPABASE_ANON_KEY!,
+        serviceKey: env.PROD_SUPABASE_SERVICE_KEY!,
+      }
+    : null,
+  staging: hasEnvironmentConfig('STAGING')
+    ? {
+        url: env.STAGING_SUPABASE_URL!,
+        anonKey: env.STAGING_SUPABASE_ANON_KEY!,
+        serviceKey: env.STAGING_SUPABASE_SERVICE_KEY!,
+      }
+    : null,
+  dev: hasEnvironmentConfig('DEV')
+    ? {
+        url: env.DEV_SUPABASE_URL!,
+        anonKey: env.DEV_SUPABASE_ANON_KEY!,
+        serviceKey: env.DEV_SUPABASE_SERVICE_KEY!,
+      }
+    : null,
+};
+
+// Backward compatibility: if no multi-env configs, fall back to legacy SUPABASE_* vars
+const legacyConfig = (env.SUPABASE_URL && env.SUPABASE_ANON_KEY && env.SUPABASE_SERVICE_KEY)
+  ? {
+      url: env.SUPABASE_URL,
+      anonKey: env.SUPABASE_ANON_KEY,
+      serviceKey: env.SUPABASE_SERVICE_KEY,
+    }
+  : null;
+
 export const config = {
-  supabase: {
-    url: env.SUPABASE_URL,
-    anonKey: env.SUPABASE_ANON_KEY,
-    serviceKey: env.SUPABASE_SERVICE_KEY,
+  // Legacy single supabase config (backward compatibility)
+  supabase: legacyConfig || environments.prod || {
+    url: '',
+    anonKey: '',
+    serviceKey: '',
   },
+  // Multi-environment configs
+  environments,
   api: {
     port: env.API_PORT,
     host: env.API_HOST,
