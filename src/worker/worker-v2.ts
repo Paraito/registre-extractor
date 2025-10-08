@@ -1,9 +1,13 @@
 import { AIRegistreExtractor as RegistreExtractor } from './extractor-ai';
-import { supabase } from '../utils/supabase';
+import { supabase, supabaseManager, EnvironmentName } from '../utils/supabase';
 import { logger } from '../utils/logger';
 import { ExtractionQueueJob, WorkerAccount, WorkerStatus, DataValidationError, EXTRACTION_STATUS } from '../types';
 import { v4 as uuidv4 } from 'uuid';
 import fs from 'fs/promises';
+
+interface ExtractionQueueJobWithEnv extends ExtractionQueueJob {
+  _environment: EnvironmentName;
+}
 
 export class ExtractionWorkerV2 {
   private workerId: string;
@@ -141,62 +145,108 @@ export class ExtractionWorkerV2 {
     }
   }
 
-  private async getNextJob(): Promise<ExtractionQueueJob | null> {
+  private async getNextJob(): Promise<ExtractionQueueJobWithEnv | null> {
     // Set worker to idle while looking for jobs
     this.workerStatus.status = 'idle';
-    
-    // First check if there's already a job assigned to this worker
-    const { data: assignedJob, error: assignedError } = await supabase
-      .from('extraction_queue')
-      .select('*')
-      .eq('worker_id', this.workerId)
-      .eq('status_id', EXTRACTION_STATUS.EN_TRAITEMENT)
-      .limit(1);
 
-    if (!assignedError && assignedJob && assignedJob.length > 0) {
-      logger.info({ jobId: assignedJob[0].id, workerId: this.workerId }, 'Found job already assigned to this worker');
-      return assignedJob[0];
-    }
+    // Get all available environments
+    const environments = supabaseManager.getAvailableEnvironments();
 
-    // If no assigned job, look for new jobs to claim
-    const { data, error } = await supabase
-      .from('extraction_queue')
-      .select('*')
-      .eq('status_id', EXTRACTION_STATUS.EN_ATTENTE)
-      .order('created_at', { ascending: true })
-      .limit(1);
-
-    if (error || !data || data.length === 0) {
+    if (environments.length === 0) {
+      logger.error('No Supabase environments configured');
       return null;
     }
 
-    const job = data[0];
-    
-    // Try to claim the job by updating it to "En traitement"
-    const { data: claimedJob, error: claimError } = await supabase
-      .from('extraction_queue')
-      .update({
-        status_id: EXTRACTION_STATUS.EN_TRAITEMENT,
-        worker_id: this.workerId,
-        processing_started_at: new Date().toISOString(),
-      })
-      .eq('id', job.id)
-      .eq('status_id', EXTRACTION_STATUS.EN_ATTENTE) // Ensure it's still available
-      .select()
-      .single();
+    // Check for stale jobs and reset them in all environments
+    const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
 
-    if (claimError || !claimedJob) {
-      // Another worker probably claimed it
-      return null;
+    for (const env of environments) {
+      const client = supabaseManager.getServiceClient(env);
+      if (!client) continue;
+
+      const { data: staleJobs } = await client
+        .from('extraction_queue')
+        .select('*')
+        .eq('status_id', EXTRACTION_STATUS.EN_TRAITEMENT)
+        .lt('processing_started_at', fiveMinutesAgo)
+        .limit(1);
+
+      if (staleJobs && staleJobs.length > 0) {
+        await client
+          .from('extraction_queue')
+          .update({
+            status_id: EXTRACTION_STATUS.EN_ATTENTE,
+            worker_id: null,
+            processing_started_at: null,
+          })
+          .eq('id', staleJobs[0].id);
+
+        logger.warn({ jobId: staleJobs[0].id, environment: env }, 'Reset stale job');
+      }
     }
 
-    return claimedJob;
+    // Poll all environments for pending jobs
+    for (const env of environments) {
+      const client = supabaseManager.getServiceClient(env);
+      if (!client) continue;
+
+      const { data, error } = await client
+        .from('extraction_queue')
+        .select('*')
+        .eq('status_id', EXTRACTION_STATUS.EN_ATTENTE)
+        .order('created_at', { ascending: true })
+        .limit(1);
+
+      if (error || !data || data.length === 0) {
+        continue; // Try next environment
+      }
+
+      const job = data[0];
+
+      // Try to claim the job by updating it to "En traitement"
+      const { data: claimedJob, error: claimError } = await client
+        .from('extraction_queue')
+        .update({
+          status_id: EXTRACTION_STATUS.EN_TRAITEMENT,
+          worker_id: this.workerId,
+          processing_started_at: new Date().toISOString(),
+        })
+        .eq('id', job.id)
+        .eq('status_id', EXTRACTION_STATUS.EN_ATTENTE) // Ensure it's still available
+        .select()
+        .single();
+
+      if (claimError || !claimedJob) {
+        // Another worker probably claimed it, try next environment
+        continue;
+      }
+
+      // Successfully claimed a job - add environment metadata
+      logger.info({ jobId: claimedJob.id, environment: env }, 'Claimed job from environment');
+
+      return {
+        ...claimedJob,
+        _environment: env,
+      };
+    }
+
+    // No jobs available in any environment
+    return null;
   }
 
-  private async processJob(job: ExtractionQueueJob): Promise<void> {
+  private async processJob(job: ExtractionQueueJobWithEnv): Promise<void> {
+    const environment = job._environment;
+    const client = supabaseManager.getServiceClient(environment);
+
+    if (!client) {
+      logger.error({ jobId: job.id, environment }, 'No Supabase client for environment');
+      return;
+    }
+
     logger.info({ 
       jobId: job.id, 
       workerId: this.workerId,
+      environment,
       documentSource: job.document_source,
       documentNumber: job.document_number
     }, 'Processing job');
@@ -226,7 +276,7 @@ export class ExtractionWorkerV2 {
       
       const storagePath = `${fileName}`;
       
-      const { error: uploadError } = await supabase.storage
+      const { error: uploadError } = await client.storage
         .from(bucketName)
         .upload(storagePath, fileContent, {
           contentType: 'application/pdf',
@@ -238,16 +288,16 @@ export class ExtractionWorkerV2 {
       }
 
       // Get public URL
-      const { data: { publicUrl } } = supabase.storage
+      const { data: { publicUrl } } = client.storage
         .from(bucketName)
         .getPublicUrl(storagePath);
 
       // Update job as completed
-      await supabase
+      await client
         .from('extraction_queue')
         .update({
           status_id: EXTRACTION_STATUS.COMPLETE,
-          supabase_path: `${bucketName}/${storagePath}`,
+          supabase_path: publicUrl,
           attemtps: (job.attemtps || 0) + 1,
         })
         .eq('id', job.id);
@@ -261,6 +311,7 @@ export class ExtractionWorkerV2 {
       logger.info({ 
         jobId: job.id, 
         workerId: this.workerId,
+        environment,
         documentUrl: publicUrl,
         bucketName,
         fileName
@@ -283,7 +334,7 @@ export class ExtractionWorkerV2 {
         }, 'Data validation error - invalid data from Supabase');
         
         // For data validation errors, immediately set status to 'Erreur' without retrying
-        await supabase
+        await client
           .from('extraction_queue')
           .update({
             status_id: EXTRACTION_STATUS.ERREUR,
@@ -298,7 +349,7 @@ export class ExtractionWorkerV2 {
         const attempts = (job.attemtps || 0) + 1;
         const maxAttempts = job.max_attempts || 3;
         
-        await supabase
+        await client
           .from('extraction_queue')
           .update({
             status_id: attempts >= maxAttempts ? EXTRACTION_STATUS.ERREUR : EXTRACTION_STATUS.EN_ATTENTE,

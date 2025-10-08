@@ -372,7 +372,7 @@ export class ExtractionWorker {
         .from('extraction_queue')
         .update({
           status_id: EXTRACTION_STATUS.COMPLETE,
-          supabase_path: `${bucketName}/${storagePath}`,
+          supabase_path: publicUrl,
           attemtps: (job.attemtps || 0) + 1,
         })
         .eq('id', job.id);
