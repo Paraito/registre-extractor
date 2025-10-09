@@ -385,7 +385,7 @@ export class ExtractionWorker {
       const extractionConfig = convertToExtractionConfig(job);
 
       // Race between actual processing and timeout
-      await Promise.race([
+      const localFilePath = await Promise.race([
         (async () => {
           // Navigate to the correct search page
           await this.extractor!.navigateToSearch(extractionConfig.document_type);
@@ -394,59 +394,54 @@ export class ExtractionWorker {
           return await this.extractor!.extractDocument(extractionConfig);
         })(),
         timeoutPromise
-      ]).then(async (localFilePath) => {
-        // Continue with upload if extraction succeeded
-        if (typeof localFilePath !== 'string') {
-          throw new Error('Invalid extraction result');
-        }
+      ]);
 
-        // Upload to Supabase Storage with correct bucket and naming
-        const { bucketName, fileName } = this.getStorageInfo(job);
-        const fileContent = await fs.readFile(localFilePath);
+      // Upload to Supabase Storage with correct bucket and naming
+      const { bucketName, fileName } = this.getStorageInfo(job);
+      const fileContent = await fs.readFile(localFilePath);
 
-        const storagePath = `${fileName}`;
+      const storagePath = `${fileName}`;
 
-        const { error: uploadError } = await client.storage
-          .from(bucketName)
-          .upload(storagePath, fileContent, {
-            contentType: 'application/pdf',
-            upsert: true, // Allow overwriting if file exists
-          });
+      const { error: uploadError } = await client.storage
+        .from(bucketName)
+        .upload(storagePath, fileContent, {
+          contentType: 'application/pdf',
+          upsert: true, // Allow overwriting if file exists
+        });
 
-        if (uploadError) {
-          throw uploadError;
-        }
+      if (uploadError) {
+        throw uploadError;
+      }
 
-        // Get public URL
-        const { data: { publicUrl } } = client.storage
-          .from(bucketName)
-          .getPublicUrl(storagePath);
+      // Get public URL
+      const { data: { publicUrl } } = client.storage
+        .from(bucketName)
+        .getPublicUrl(storagePath);
 
-        // Update job as completed
-        await client
-          .from('extraction_queue')
-          .update({
-            status_id: EXTRACTION_STATUS.COMPLETE,
-            supabase_path: publicUrl,
-            attemtps: (job.attemtps || 0) + 1,
-          })
-          .eq('id', job.id);
+      // Update job as completed
+      await client
+        .from('extraction_queue')
+        .update({
+          status_id: EXTRACTION_STATUS.COMPLETE,
+          supabase_path: publicUrl,
+          attemtps: (job.attemtps || 0) + 1,
+        })
+        .eq('id', job.id);
 
-        // Clean up local file
-        await fs.unlink(localFilePath);
+      // Clean up local file
+      await fs.unlink(localFilePath);
 
-        // Update worker stats
-        this.workerStatus.jobs_completed++;
+      // Update worker stats
+      this.workerStatus.jobs_completed++;
 
-        logger.info({
-          jobId: job.id,
-          workerId: this.workerId,
-          environment,
-          documentUrl: publicUrl,
-          bucketName,
-          fileName
-        }, 'Job completed successfully');
-      });
+      logger.info({
+        jobId: job.id,
+        workerId: this.workerId,
+        environment,
+        documentUrl: publicUrl,
+        bucketName,
+        fileName
+      }, 'Job completed successfully');
       
     } catch (error) {
       logger.error({ 
