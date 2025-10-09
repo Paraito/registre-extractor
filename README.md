@@ -11,6 +11,7 @@ A robust, AI-powered document extraction service for the Quebec Land Registry (R
 - 🔌 **n8n Integration**: Ready-to-use workflow templates
 - 🗄️ **Supabase Storage**: Secure document storage and metadata management
 - 🐳 **Docker Ready**: Fully containerized for easy deployment
+- 🔍 **OCR Processing**: Automated OCR for index documents using Google Gemini AI with 60+ correction rules
 
 ## Architecture
 
@@ -24,6 +25,12 @@ A robust, AI-powered document extraction service for the Quebec Land Registry (R
 │    Supabase     │◀────│  Worker Pool    │◀────│   20 Workers    │
 │  Storage & DB   │     │   (Docker)      │     │   (AgentQL)     │
 └─────────────────┘     └─────────────────┘     └─────────────────┘
+                                │                         │
+                                │                         ▼
+                                │                 ┌─────────────────┐
+                                └────────────────▶│  OCR Monitor    │
+                                                  │  (Gemini AI)    │
+                                                  └─────────────────┘
 ```
 
 ## Quick Start
@@ -123,6 +130,43 @@ Features:
    - Batch processing
    - Automated monitoring
    - Supabase integration
+
+### OCR Processing
+
+The system includes automated OCR processing for index documents using Google's Gemini AI.
+
+**Features:**
+- Automatic processing of completed index documents
+- 60+ domain-specific correction rules for Quebec land registry
+- High accuracy (95%+) text extraction
+- Intelligent boost corrections for common OCR errors
+
+**Setup:**
+```bash
+# 1. Add Gemini API key to .env
+GEMINI_API_KEY=your-gemini-api-key
+
+# 2. Install PDF conversion tools
+brew install imagemagick poppler  # macOS
+# or
+sudo apt-get install imagemagick poppler-utils  # Ubuntu
+
+# 3. Run the OCR monitor
+npm run ocr:dev  # Development
+npm run ocr      # Production
+
+# 4. Test the integration
+npm run test:ocr
+```
+
+**How it works:**
+1. Worker extracts PDF → `status_id = 3` (Complété)
+2. OCR Monitor detects index documents needing OCR
+3. Converts PDF to image and extracts text with Gemini AI
+4. Applies 60+ correction rules (boost)
+5. Stores result in `file_content` → `status_id = 5` (Extraction Complété)
+
+For detailed documentation, see [OCR_INTEGRATION.md](OCR_INTEGRATION.md)
 
 ## Configuration
 

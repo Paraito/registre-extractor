@@ -40,7 +40,8 @@ export interface ExtractionQueueJob {
   retry_count?: number;
   supabase_path?: string;
   error_message?: string;
-  file_content?: string;
+  file_content?: string; // Raw OCR text (unprocessed)
+  boosted_file_content?: string; // Enhanced OCR text (with corrections applied)
   searchable_file_content?: string;
   claude_file_id?: string;
   file_id_active?: boolean;

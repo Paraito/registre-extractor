@@ -37,6 +37,20 @@ const envSchema = z.object({
   AGENTQL_API_KEY: z.string().optional(),
   USE_AI_EXTRACTOR: z.string().transform(val => val === 'true').default('true'),
   OPENAI_API_KEY: z.string().optional(),
+
+  // OCR Configuration
+  GEMINI_API_KEY: z.string().optional(),
+  OCR_EXTRACT_MODEL: z.string().default('gemini-2.0-flash-exp'),
+  OCR_BOOST_MODEL: z.string().default('gemini-2.5-pro'),
+  OCR_EXTRACT_TEMPERATURE: z.string().transform(Number).default('0.1'),
+  OCR_BOOST_TEMPERATURE: z.string().transform(Number).default('0.2'),
+  OCR_POLL_INTERVAL_MS: z.string().transform(Number).default('10000'),
+  OCR_TEMP_DIR: z.string().default('/tmp/ocr-processing'),
+
+  // OCR Environment Control
+  OCR_PROD: z.string().transform(val => val !== 'false').default('true'),
+  OCR_STAGING: z.string().transform(val => val !== 'false').default('true'),
+  OCR_DEV: z.string().transform(val => val !== 'false').default('true'),
 });
 
 const env = envSchema.parse(process.env);
@@ -123,5 +137,19 @@ export const config = {
   useAIExtractor: env.USE_AI_EXTRACTOR,
   openai: {
     apiKey: env.OPENAI_API_KEY,
+  },
+  ocr: {
+    geminiApiKey: env.GEMINI_API_KEY,
+    extractModel: env.OCR_EXTRACT_MODEL,
+    boostModel: env.OCR_BOOST_MODEL,
+    extractTemperature: env.OCR_EXTRACT_TEMPERATURE,
+    boostTemperature: env.OCR_BOOST_TEMPERATURE,
+    pollIntervalMs: env.OCR_POLL_INTERVAL_MS,
+    tempDir: env.OCR_TEMP_DIR,
+    enabledEnvironments: {
+      prod: env.OCR_PROD,
+      staging: env.OCR_STAGING,
+      dev: env.OCR_DEV,
+    },
   },
 };
