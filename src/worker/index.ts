@@ -50,6 +50,9 @@ export class ExtractionWorker {
         throw new Error('No Supabase environments configured. Please set up environment credentials in .env');
       }
 
+      // Reset any stuck jobs on startup (from crashed workers)
+      await this.resetStuckJobsOnStartup(environments);
+
       // Register worker in database
       await this.registerWorker();
 
@@ -106,6 +109,78 @@ export class ExtractionWorker {
         logger.error({ error, workerId: this.workerId }, 'Error closing extractor');
       }
       this.extractor = null;
+    }
+  }
+
+  /**
+   * Reset stuck jobs on worker startup
+   * This handles jobs that were left in processing state from crashed workers
+   */
+  private async resetStuckJobsOnStartup(environments: EnvironmentName[]): Promise<void> {
+    logger.info({ workerId: this.workerId }, 'Checking for stuck jobs on startup...');
+
+    let totalReset = 0;
+
+    for (const env of environments) {
+      const client = supabaseManager.getServiceClient(env);
+      if (!client) continue;
+
+      try {
+        // Find jobs stuck in processing state (likely from crashed workers)
+        // Use a shorter threshold on startup (2 minutes) to quickly recover
+        const twoMinutesAgo = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+
+        const { data: stuckJobs, error: queryError } = await client
+          .from('extraction_queue')
+          .select('id, worker_id, document_source, document_number, processing_started_at')
+          .eq('status_id', EXTRACTION_STATUS.EN_TRAITEMENT)
+          .lt('processing_started_at', twoMinutesAgo);
+
+        if (queryError) {
+          logger.error({ error: queryError, environment: env }, 'Error querying stuck jobs on startup');
+          continue;
+        }
+
+        if (stuckJobs && stuckJobs.length > 0) {
+          // Reset all stuck jobs
+          const { error: updateError } = await client
+            .from('extraction_queue')
+            .update({
+              status_id: EXTRACTION_STATUS.EN_ATTENTE,
+              worker_id: null,
+              processing_started_at: null,
+              error_message: 'Reset on worker startup - job was stuck in processing'
+            })
+            .eq('status_id', EXTRACTION_STATUS.EN_TRAITEMENT)
+            .lt('processing_started_at', twoMinutesAgo);
+
+          if (updateError) {
+            logger.error({ error: updateError, environment: env }, 'Error resetting stuck jobs on startup');
+            continue;
+          }
+
+          totalReset += stuckJobs.length;
+
+          logger.warn({
+            environment: env,
+            count: stuckJobs.length,
+            jobs: stuckJobs.map(j => ({
+              id: j.id.substring(0, 8),
+              worker: j.worker_id?.substring(0, 8),
+              doc: `${j.document_source}:${j.document_number}`,
+              stuckFor: Math.round((Date.now() - new Date(j.processing_started_at).getTime()) / 60000) + 'm'
+            }))
+          }, '🔄 Reset stuck jobs on startup');
+        }
+      } catch (error) {
+        logger.error({ error, environment: env }, 'Error in resetStuckJobsOnStartup');
+      }
+    }
+
+    if (totalReset > 0) {
+      logger.info({ totalReset }, `✅ Reset ${totalReset} stuck job(s) on startup - ready to process`);
+    } else {
+      logger.info('✅ No stuck jobs found - ready to process');
     }
   }
 
