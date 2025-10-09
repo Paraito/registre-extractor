@@ -170,51 +170,88 @@ export class ExtractionWorker {
 
   private async processContinuously(): Promise<void> {
     while (!this.shouldStop) {
+      let currentJob: ExtractionQueueJobWithEnv | null = null;
+
       try {
         // Get next job with status "En attente"
         const job = await this.getNextJob();
-        
+        currentJob = job; // Track current job for error handling
+
         if (!job) {
           // Check if we've been idle too long
           const idleTime = Date.now() - this.lastJobTime;
-          
+
           if (idleTime > this.idleTimeoutMs && this.extractor) {
-            logger.info({ 
+            logger.info({
               workerId: this.workerId,
               idleMinutes: Math.round(idleTime / 60000)
             }, 'Worker idle timeout - closing browser to prevent session timeout');
-            
+
             // Close the browser and clean up
             await this.closeExtractor();
           }
-          
+
           // No jobs available, wait a bit
           await new Promise(resolve => setTimeout(resolve, 5000));
           continue;
         }
-        
+
         // Ensure extractor is initialized before processing
         if (!this.extractor) {
           await this.initializeExtractor();
         }
-        
+
         // Update last job time
         this.lastJobTime = Date.now();
-        
+
         // Process the job
         await this.processJob(job);
-        
+
       } catch (error) {
-        logger.error({ error, workerId: this.workerId }, 'Error in continuous processing');
-        
+        logger.error({
+          error,
+          workerId: this.workerId,
+          jobId: currentJob?.id,
+          environment: currentJob?._environment
+        }, 'Error in continuous processing');
+
+        // CRITICAL: If we have a current job that might be stuck, reset it
+        if (currentJob) {
+          try {
+            const client = supabaseManager.getServiceClient(currentJob._environment);
+            if (client) {
+              logger.warn({
+                jobId: currentJob.id,
+                workerId: this.workerId
+              }, 'Resetting job due to unhandled error in processing loop');
+
+              await client
+                .from('extraction_queue')
+                .update({
+                  status_id: EXTRACTION_STATUS.EN_ATTENTE,
+                  worker_id: null,
+                  processing_started_at: null,
+                  error_message: `Worker error in processing loop: ${error instanceof Error ? error.message : 'Unknown error'}`
+                })
+                .eq('id', currentJob.id)
+                .eq('worker_id', this.workerId); // Only reset if we still own it
+            }
+          } catch (resetError) {
+            logger.error({
+              resetError,
+              jobId: currentJob.id
+            }, 'Failed to reset job after processing error');
+          }
+        }
+
         // If it's a browser/connection error, close and reinitialize
-        if (error instanceof Error && 
-            (error.message.includes('browser') || 
+        if (error instanceof Error &&
+            (error.message.includes('browser') ||
              error.message.includes('closed') ||
              error.message.includes('Target closed'))) {
           await this.closeExtractor();
         }
-        
+
         await new Promise(resolve => setTimeout(resolve, 10000));
       }
     }
@@ -325,11 +362,19 @@ export class ExtractionWorker {
       documentSource: job.document_source,
       documentNumber: job.document_number
     }, 'Processing job');
-    
+
     this.isProcessing = true;
     this.workerStatus.status = 'busy';
     this.workerStatus.current_job_id = job.id;
     this.currentJobEnvironment = environment;
+
+    // Set a timeout for the entire job processing (5 minutes)
+    const jobTimeout = 5 * 60 * 1000; // 5 minutes
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(() => {
+        reject(new Error(`Job processing timeout after ${jobTimeout / 1000} seconds`));
+      }, jobTimeout);
+    });
 
     try {
       if (!this.extractor) {
@@ -338,59 +383,70 @@ export class ExtractionWorker {
 
       // Convert job to extraction config format
       const extractionConfig = convertToExtractionConfig(job);
-      
-      // Navigate to the correct search page
-      await this.extractor.navigateToSearch(extractionConfig.document_type);
-      
-      // Extract document
-      const localFilePath = await this.extractor.extractDocument(extractionConfig);
 
-      // Upload to Supabase Storage with correct bucket and naming
-      const { bucketName, fileName } = this.getStorageInfo(job);
-      const fileContent = await fs.readFile(localFilePath);
-      
-      const storagePath = `${fileName}`;
+      // Race between actual processing and timeout
+      await Promise.race([
+        (async () => {
+          // Navigate to the correct search page
+          await this.extractor!.navigateToSearch(extractionConfig.document_type);
 
-      const { error: uploadError } = await client.storage
-        .from(bucketName)
-        .upload(storagePath, fileContent, {
-          contentType: 'application/pdf',
-          upsert: true, // Allow overwriting if file exists
-        });
+          // Extract document
+          return await this.extractor!.extractDocument(extractionConfig);
+        })(),
+        timeoutPromise
+      ]).then(async (localFilePath) => {
+        // Continue with upload if extraction succeeded
+        if (typeof localFilePath !== 'string') {
+          throw new Error('Invalid extraction result');
+        }
 
-      if (uploadError) {
-        throw uploadError;
-      }
+        // Upload to Supabase Storage with correct bucket and naming
+        const { bucketName, fileName } = this.getStorageInfo(job);
+        const fileContent = await fs.readFile(localFilePath);
 
-      // Get public URL
-      const { data: { publicUrl } } = client.storage
-        .from(bucketName)
-        .getPublicUrl(storagePath);
+        const storagePath = `${fileName}`;
 
-      // Update job as completed
-      await client
-        .from('extraction_queue')
-        .update({
-          status_id: EXTRACTION_STATUS.COMPLETE,
-          supabase_path: publicUrl,
-          attemtps: (job.attemtps || 0) + 1,
-        })
-        .eq('id', job.id);
+        const { error: uploadError } = await client.storage
+          .from(bucketName)
+          .upload(storagePath, fileContent, {
+            contentType: 'application/pdf',
+            upsert: true, // Allow overwriting if file exists
+          });
 
-      // Clean up local file
-      await fs.unlink(localFilePath);
-      
-      // Update worker stats
-      this.workerStatus.jobs_completed++;
+        if (uploadError) {
+          throw uploadError;
+        }
 
-      logger.info({
-        jobId: job.id,
-        workerId: this.workerId,
-        environment,
-        documentUrl: publicUrl,
-        bucketName,
-        fileName
-      }, 'Job completed successfully');
+        // Get public URL
+        const { data: { publicUrl } } = client.storage
+          .from(bucketName)
+          .getPublicUrl(storagePath);
+
+        // Update job as completed
+        await client
+          .from('extraction_queue')
+          .update({
+            status_id: EXTRACTION_STATUS.COMPLETE,
+            supabase_path: publicUrl,
+            attemtps: (job.attemtps || 0) + 1,
+          })
+          .eq('id', job.id);
+
+        // Clean up local file
+        await fs.unlink(localFilePath);
+
+        // Update worker stats
+        this.workerStatus.jobs_completed++;
+
+        logger.info({
+          jobId: job.id,
+          workerId: this.workerId,
+          environment,
+          documentUrl: publicUrl,
+          bucketName,
+          fileName
+        }, 'Job completed successfully');
+      });
       
     } catch (error) {
       logger.error({ 
