@@ -33,6 +33,7 @@ const envSchema = z.object({
   LOG_LEVEL: z.enum(['error', 'warn', 'info', 'debug']).default('info'),
   REGISTRY_BASE_URL: z.string().url().default('https://www.registrefoncier.gouv.qc.ca/Sirf/'),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
+  HEADLESS: z.string().transform(val => val !== 'false').default('true'),
   AGENTQL_API_KEY: z.string().optional(),
   USE_AI_EXTRACTOR: z.string().transform(val => val === 'true').default('true'),
   OPENAI_API_KEY: z.string().optional(),
@@ -115,6 +116,7 @@ export const config = {
   isDevelopment: env.NODE_ENV === 'development',
   isProduction: env.NODE_ENV === 'production',
   isTest: env.NODE_ENV === 'test',
+  headless: env.HEADLESS,
   agentQL: {
     apiKey: env.AGENTQL_API_KEY,
   },
