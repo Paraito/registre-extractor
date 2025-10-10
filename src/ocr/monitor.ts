@@ -14,6 +14,7 @@ export interface OCRMonitorConfig {
   pollIntervalMs?: number;
   tempDir?: string;
   concurrency?: number;
+  workerId?: string;
   acte?: {
     extractModel?: string;
     boostModel?: string;
@@ -32,8 +33,13 @@ export class OCRMonitor {
   private pollIntervalMs: number;
   private isRunning: boolean = false;
   private pollTimeout: NodeJS.Timeout | null = null;
+  private workerId: string;
 
   constructor(config: OCRMonitorConfig) {
+    // Generate unique worker ID
+    this.workerId = config.workerId || `ocr-worker-${process.pid}-${Date.now()}`;
+
+    logger.debug({ workerId: this.workerId }, 'OCR Worker ID assigned');
     // Initialize index processor (uses Vision API with PDF to image conversion)
     this.indexProcessor = new OCRProcessor({
       geminiApiKey: config.geminiApiKey,
@@ -129,6 +135,7 @@ export class OCRMonitor {
 
   /**
    * Find and process the next document that needs OCR
+   * Uses database-level locking to prevent race conditions between workers
    */
   private async processNextDocument(): Promise<void> {
     const environments = supabaseManager.getAvailableEnvironments();
@@ -193,10 +200,60 @@ export class OCRMonitor {
           continue; // No eligible documents in this environment
         }
 
-        const document = eligibleDocuments[0];
+        // Try to claim a document using atomic update (prevents race conditions)
+        let claimedDocument: ExtractionQueueJob | null = null;
 
-        // Process this document (routing to appropriate processor based on document_source)
-        await this.processDocument(document, env);
+        for (const document of eligibleDocuments) {
+          // Atomically claim the document by updating status to OCR_PROCESSING
+          // This will only succeed if the document is still in COMPLETE status
+          const { data: updatedDocs, error: claimError } = await client
+            .from('extraction_queue')
+            .update({
+              status_id: EXTRACTION_STATUS.OCR_PROCESSING,
+              ocr_worker_id: this.workerId,
+              ocr_started_at: new Date().toISOString(),
+              ocr_attempts: (document.ocr_attempts || 0) + 1,
+              updated_at: new Date().toISOString()
+            })
+            .eq('id', document.id)
+            .eq('status_id', EXTRACTION_STATUS.COMPLETE) // Only update if still COMPLETE
+            .select();
+
+          if (!claimError && updatedDocs && updatedDocs.length > 0) {
+            // Successfully claimed this document
+            claimedDocument = updatedDocs[0] as ExtractionQueueJob;
+            logger.debug({
+              documentId: document.id,
+              documentNumber: document.document_number,
+              workerId: this.workerId,
+              environment: env
+            }, 'Document claimed by worker');
+            break;
+          } else if (claimError) {
+            logger.debug({
+              documentId: document.id,
+              error: claimError,
+              environment: env
+            }, 'Failed to claim document (may have been claimed by another worker)');
+          } else {
+            logger.debug({
+              documentId: document.id,
+              environment: env
+            }, 'Document already claimed by another worker');
+          }
+        }
+
+        if (!claimedDocument) {
+          // All documents were already claimed by other workers
+          logger.debug({
+            environment: env,
+            attemptedDocuments: eligibleDocuments.length
+          }, 'No documents available to claim (all claimed by other workers)');
+          continue;
+        }
+
+        // Process the claimed document (routing to appropriate processor based on document_source)
+        await this.processDocument(claimedDocument, env);
 
         // Only process one document per poll cycle
         return;
@@ -232,6 +289,7 @@ export class OCRMonitor {
 
   /**
    * Process an index document with OCR (using Vision API)
+   * Note: Document is already claimed and marked as OCR_PROCESSING by processNextDocument
    */
   private async processIndexDocument(
     document: ExtractionQueueJob,
@@ -246,26 +304,9 @@ export class OCRMonitor {
 
     OCRLogger.documentStart(document.document_number, environment, document.id);
 
-    // Generate worker ID (could be made configurable)
-    const workerIdValue = process.env.OCR_WORKER_ID || 'ocr-monitor-1';
-
     try {
-      // Mark job as OCR in-progress before processing
-      const { error: updateStartError } = await client
-        .from('extraction_queue')
-        .update({
-          status_id: EXTRACTION_STATUS.OCR_PROCESSING,
-          ocr_worker_id: workerIdValue,
-          ocr_started_at: new Date().toISOString(),
-          ocr_attempts: (document.ocr_attempts || 0) + 1,
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', document.id);
-
-      if (updateStartError) {
-        logger.error({ error: updateStartError, documentId: document.id }, 'Failed to mark job as OCR in-progress');
-        // Continue anyway - this is not critical
-      }
+      // Document is already claimed and marked as OCR_PROCESSING by processNextDocument
+      // No need to update status again here
 
       // Validate that we have a PDF path
       if (!document.supabase_path) {
@@ -281,14 +322,36 @@ export class OCRMonitor {
       let storagePath = document.supabase_path;
       if (storagePath.startsWith('http://') || storagePath.startsWith('https://')) {
         // Extract path from URL if it's a full URL
-        const urlMatch = storagePath.match(/\/storage\/v1\/object\/(?:public|sign)\/[^/]+\/(.+)$/);
+        // Handle both formats:
+        // 1. With /public/ or /sign/: /storage/v1/object/public/bucket/path or /storage/v1/object/sign/bucket/path
+        // 2. Direct bucket path: /storage/v1/object/bucket/path
+        const urlMatch = storagePath.match(/\/storage\/v1\/object\/(?:(?:public|sign)\/)?(.+)$/);
         if (urlMatch) {
-          storagePath = urlMatch[1];
+          const fullPath = urlMatch[1];
+          // Remove bucket name from the beginning if present
+          if (fullPath.startsWith(`${bucketName}/`)) {
+            storagePath = fullPath.substring(bucketName.length + 1);
+          } else {
+            storagePath = fullPath;
+          }
+        } else {
+          logger.warn({
+            documentId: document.id,
+            supabasePath: document.supabase_path
+          }, 'Could not parse URL format, using as-is');
         }
       } else if (storagePath.startsWith(`${bucketName}/`)) {
         // Remove bucket prefix from path
         storagePath = storagePath.substring(bucketName.length + 1);
       }
+
+      logger.debug({
+        documentId: document.id,
+        documentSource: document.document_source,
+        originalPath: document.supabase_path,
+        parsedPath: storagePath,
+        bucket: bucketName
+      }, 'Index/Plan PDF path parsing');
 
       // Download the PDF from private bucket using authenticated client
       const { data: pdfData, error: downloadError } = await client.storage
@@ -296,7 +359,7 @@ export class OCRMonitor {
         .download(storagePath);
 
       if (downloadError || !pdfData) {
-        throw new Error(`Failed to download PDF from bucket: ${downloadError?.message || 'No data'}`);
+        throw new Error(`Failed to download PDF from bucket: ${JSON.stringify(downloadError)}`);
       }
 
       // Save to temporary file
@@ -400,7 +463,7 @@ export class OCRMonitor {
             status_id: EXTRACTION_STATUS.COMPLETE, // Revert to ready for retry
             ocr_error: `OCR processing failed: ${errorMsg}`,
             ocr_last_error_at: new Date().toISOString(),
-            error_message: `OCR processing failed: ${errorMsg}`, // Keep for backward compatibility
+            // Do NOT set error_message - that's for registre extractor errors only
             updated_at: new Date().toISOString()
           })
           .eq('id', document.id);
@@ -415,6 +478,7 @@ export class OCRMonitor {
 
   /**
    * Process an acte document with OCR (using File API)
+   * Note: Document is already claimed and marked as OCR_PROCESSING by processNextDocument
    */
   private async processActeDocument(
     document: ExtractionQueueJob,
@@ -429,26 +493,9 @@ export class OCRMonitor {
 
     OCRLogger.documentStart(document.document_number, environment, document.id);
 
-    // Generate worker ID (could be made configurable)
-    const workerIdValue = process.env.OCR_WORKER_ID || 'ocr-monitor-1';
-
     try {
-      // Mark job as OCR in-progress before processing
-      const { error: updateStartError } = await client
-        .from('extraction_queue')
-        .update({
-          status_id: EXTRACTION_STATUS.OCR_PROCESSING,
-          ocr_worker_id: workerIdValue,
-          ocr_started_at: new Date().toISOString(),
-          ocr_attempts: (document.ocr_attempts || 0) + 1,
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', document.id);
-
-      if (updateStartError) {
-        logger.error({ error: updateStartError, documentId: document.id }, 'Failed to mark job as OCR in-progress');
-        // Continue anyway - this is not critical
-      }
+      // Document is already claimed and marked as OCR_PROCESSING by processNextDocument
+      // No need to update status again here
 
       // Validate that we have a PDF path
       if (!document.supabase_path) {
@@ -462,14 +509,35 @@ export class OCRMonitor {
       let storagePath = document.supabase_path;
       if (storagePath.startsWith('http://') || storagePath.startsWith('https://')) {
         // Extract path from URL if it's a full URL
-        const urlMatch = storagePath.match(/\/storage\/v1\/object\/(?:public|sign)\/[^/]+\/(.+)$/);
+        // Handle both formats:
+        // 1. With /public/ or /sign/: /storage/v1/object/public/bucket/path or /storage/v1/object/sign/bucket/path
+        // 2. Direct bucket path: /storage/v1/object/bucket/path
+        const urlMatch = storagePath.match(/\/storage\/v1\/object\/(?:(?:public|sign)\/)?(.+)$/);
         if (urlMatch) {
-          storagePath = urlMatch[1];
+          const fullPath = urlMatch[1];
+          // Remove bucket name from the beginning if present
+          if (fullPath.startsWith(`${bucketName}/`)) {
+            storagePath = fullPath.substring(bucketName.length + 1);
+          } else {
+            storagePath = fullPath;
+          }
+        } else {
+          logger.warn({
+            documentId: document.id,
+            supabasePath: document.supabase_path
+          }, 'Could not parse URL format, using as-is');
         }
       } else if (storagePath.startsWith(`${bucketName}/`)) {
         // Remove bucket prefix from path
         storagePath = storagePath.substring(bucketName.length + 1);
       }
+
+      logger.debug({
+        documentId: document.id,
+        originalPath: document.supabase_path,
+        parsedPath: storagePath,
+        bucket: bucketName
+      }, 'Acte PDF path parsing');
 
       // Download the PDF from private bucket using authenticated client
       const { data: pdfData, error: downloadError } = await client.storage
@@ -477,7 +545,7 @@ export class OCRMonitor {
         .download(storagePath);
 
       if (downloadError || !pdfData) {
-        throw new Error(`Failed to download PDF from bucket: ${downloadError?.message || 'No data'}`);
+        throw new Error(`Failed to download PDF from bucket: ${JSON.stringify(downloadError)}`);
       }
 
       // Save to temporary file
@@ -579,7 +647,7 @@ export class OCRMonitor {
             status_id: EXTRACTION_STATUS.COMPLETE, // Revert to ready for retry
             ocr_error: `OCR processing failed: ${errorMsg}`,
             ocr_last_error_at: new Date().toISOString(),
-            error_message: `OCR processing failed: ${errorMsg}`, // Keep for backward compatibility
+            // Do NOT set error_message - that's for registre extractor errors only
             updated_at: new Date().toISOString()
           })
           .eq('id', document.id);
@@ -600,31 +668,42 @@ if (require.main === module) {
     process.exit(1);
   }
 
-  const monitor = new OCRMonitor({
-    geminiApiKey: config.ocr.geminiApiKey,
-    pollIntervalMs: config.ocr.pollIntervalMs,
-    tempDir: config.ocr.tempDir
-  });
+  const workerCount = config.ocr.workerCount || 2;
+  const workers: OCRMonitor[] = [];
+
+  logger.info({ workerCount }, 'Starting OCR workers');
+
+  // Create and start multiple workers
+  for (let i = 0; i < workerCount; i++) {
+    const workerId = config.ocr.workerId || `ocr-worker-${i + 1}`;
+
+    const monitor = new OCRMonitor({
+      geminiApiKey: config.ocr.geminiApiKey,
+      pollIntervalMs: config.ocr.pollIntervalMs,
+      tempDir: `${config.ocr.tempDir}-${i + 1}`,
+      workerId,
+      acte: config.ocr.acte
+    });
+
+    workers.push(monitor);
+
+    // Initialize and start this worker
+    monitor.initialize()
+      .then(() => monitor.start())
+      .catch((error) => {
+        logger.error({ error, workerId }, 'Failed to start OCR worker');
+        process.exit(1);
+      });
+  }
 
   // Handle graceful shutdown
-  process.on('SIGINT', async () => {
-    logger.info('Received SIGINT, shutting down...');
-    await monitor.stop();
+  const shutdown = async () => {
+    logger.info('Shutting down all OCR workers...');
+    await Promise.all(workers.map(w => w.stop()));
     process.exit(0);
-  });
+  };
 
-  process.on('SIGTERM', async () => {
-    logger.info('Received SIGTERM, shutting down...');
-    await monitor.stop();
-    process.exit(0);
-  });
-
-  // Start the monitor
-  monitor.initialize()
-    .then(() => monitor.start())
-    .catch((error) => {
-      logger.error({ error }, 'Failed to start OCR monitor');
-      process.exit(1);
-    });
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
 }
 

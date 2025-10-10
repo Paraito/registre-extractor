@@ -680,20 +680,34 @@ export class ExtractionWorker {
 
 // Main entry point
 if (require.main === module) {
-  const worker = new ExtractionWorker(process.env.WORKER_ID);
-  
-  process.on('SIGINT', async () => {
-    await worker.shutdown();
+  const workerCount = config.worker.count || 1;
+  const workers: ExtractionWorker[] = [];
+
+  logger.info({ workerCount }, 'Starting extraction workers');
+
+  // Create and start multiple workers
+  for (let i = 0; i < workerCount; i++) {
+    const workerId = process.env.WORKER_ID
+      ? `${process.env.WORKER_ID}-${i + 1}`
+      : `worker-${i + 1}-${uuidv4().substring(0, 8)}`;
+
+    const worker = new ExtractionWorker(workerId);
+    workers.push(worker);
+
+    // Initialize this worker
+    worker.initialize().catch((error) => {
+      logger.error({ error, workerId }, 'Worker failed to initialize');
+      process.exit(1);
+    });
+  }
+
+  // Handle graceful shutdown
+  const shutdown = async () => {
+    logger.info('Shutting down all extraction workers...');
+    await Promise.all(workers.map(w => w.shutdown()));
     process.exit(0);
-  });
-  
-  process.on('SIGTERM', async () => {
-    await worker.shutdown();
-    process.exit(0);
-  });
-  
-  worker.initialize().catch((error) => {
-    logger.error({ error }, 'Worker failed to initialize');
-    process.exit(1);
-  });
+  };
+
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
 }

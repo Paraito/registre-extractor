@@ -192,7 +192,7 @@ export class PDFConverter {
 
     logger.debug({ command, pageNumber }, 'Running ImageMagick conversion');
 
-    const { stdout, stderr } = await execAsync(command);
+    const { stderr } = await execAsync(command);
 
     // Only log stderr if it contains actual errors (not deprecation warnings)
     if (stderr && !stderr.includes('Warning') && !stderr.includes('WARNING') && !stderr.includes('deprecated')) {
@@ -219,7 +219,7 @@ export class PDFConverter {
 
     logger.debug({ command, pageNumber }, 'Running pdftoppm conversion');
 
-    const { stdout, stderr } = await execAsync(command);
+    const { stderr } = await execAsync(command);
 
     if (stderr) {
       logger.warn({ stderr, pageNumber }, 'pdftoppm conversion warnings');

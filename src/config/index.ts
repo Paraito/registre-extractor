@@ -27,6 +27,7 @@ const envSchema = z.object({
   REDIS_HOST: z.string().default('localhost'),
   REDIS_PORT: z.string().transform(Number).default('6379'),
   REDIS_PASSWORD: z.string().optional(),
+  WORKER_COUNT: z.string().transform(Number).default('1'),
   WORKER_CONCURRENCY: z.string().transform(Number).default('20'),
   EXTRACTION_TIMEOUT: z.string().transform(Number).default('180000'),
   SESSION_TIMEOUT: z.string().transform(Number).default('240000'),
@@ -46,6 +47,8 @@ const envSchema = z.object({
   OCR_BOOST_TEMPERATURE: z.string().transform(Number).default('0.2'),
   OCR_POLL_INTERVAL_MS: z.string().transform(Number).default('10000'),
   OCR_TEMP_DIR: z.string().default('/tmp/ocr-processing'),
+  OCR_WORKER_COUNT: z.string().transform(Number).default('2'),
+  OCR_WORKER_ID: z.string().optional(),
 
   // Acte OCR Configuration (uses File API)
   ACTE_OCR_EXTRACT_MODEL: z.string().default('gemini-2.0-flash-exp'),
@@ -122,6 +125,7 @@ export const config = {
     password: env.REDIS_PASSWORD,
   },
   worker: {
+    count: env.WORKER_COUNT,
     concurrency: env.WORKER_CONCURRENCY,
     extractionTimeout: env.EXTRACTION_TIMEOUT,
     sessionTimeout: env.SESSION_TIMEOUT,
@@ -152,6 +156,8 @@ export const config = {
     boostTemperature: env.OCR_BOOST_TEMPERATURE,
     pollIntervalMs: env.OCR_POLL_INTERVAL_MS,
     tempDir: env.OCR_TEMP_DIR,
+    workerCount: env.OCR_WORKER_COUNT,
+    workerId: env.OCR_WORKER_ID,
     enabledEnvironments: {
       prod: env.OCR_PROD,
       staging: env.OCR_STAGING,

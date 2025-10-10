@@ -114,70 +114,70 @@ export class OCRProcessor {
     }
   }
 
-  /**
-   * Process a single page: extract text and apply boost (LEGACY - for sequential processing)
-   * NOTE: This applies boost per-page, which is NOT the recommended approach.
-   * Use processPDFParallel for the correct flow: extract all -> concatenate -> boost once.
-   */
-  private async processPage(
-    pageNumber: number,
-    base64Data: string,
-    mimeType: string
-  ): Promise<PageOCRResult> {
-    logger.info({ pageNumber }, 'Processing page (legacy per-page boost)');
+  // /**
+  //  * Process a single page: extract text and apply boost (LEGACY - for sequential processing)
+  //  * NOTE: This applies boost per-page, which is NOT the recommended approach.
+  //  * Use processPDFParallel for the correct flow: extract all -> concatenate -> boost once.
+  //  */
+  // private async _processPage(
+  //   pageNumber: number,
+  //   base64Data: string,
+  //   mimeType: string
+  // ): Promise<PageOCRResult> {
+  //   logger.info({ pageNumber }, 'Processing page (legacy per-page boost)');
 
-    try {
-      // Step 1: Extract text from image
-      const extractionResult = await this.geminiClient.extractText(
-        base64Data,
-        mimeType,
-        EXTRACT_PROMPT,
-        {
-          model: this.extractModel,
-          temperature: this.extractTemperature,
-          maxAttempts: 3
-        }
-      );
+  //   try {
+  //     // Step 1: Extract text from image
+  //     const extractionResult = await this.geminiClient.extractText(
+  //       base64Data,
+  //       mimeType,
+  //       EXTRACT_PROMPT,
+  //       {
+  //         model: this.extractModel,
+  //         temperature: this.extractTemperature,
+  //         maxAttempts: 3
+  //       }
+  //     );
 
-      logger.info({
-        pageNumber,
-        textLength: extractionResult.text.length,
-        isComplete: extractionResult.isComplete
-      }, 'Text extraction completed for page');
+  //     logger.info({
+  //       pageNumber,
+  //       textLength: extractionResult.text.length,
+  //       isComplete: extractionResult.isComplete
+  //     }, 'Text extraction completed for page');
 
-      // Step 2: Apply boost corrections (per-page - not recommended)
-      const boostResult = await this.geminiClient.boostText(
-        extractionResult.text,
-        BOOST_PROMPT,
-        {
-          model: this.boostModel,
-          temperature: this.boostTemperature,
-          maxAttempts: 3
-        }
-      );
+  //     // Step 2: Apply boost corrections (per-page - not recommended)
+  //     const boostResult = await this.geminiClient.boostText(
+  //       extractionResult.text,
+  //       BOOST_PROMPT,
+  //       {
+  //         model: this.boostModel,
+  //         temperature: this.boostTemperature,
+  //         maxAttempts: 3
+  //       }
+  //     );
 
-      logger.info({
-        pageNumber,
-        boostedTextLength: boostResult.boostedText.length,
-        isComplete: boostResult.isComplete
-      }, 'Boost corrections applied for page');
+  //     logger.info({
+  //       pageNumber,
+  //       boostedTextLength: boostResult.boostedText.length,
+  //       isComplete: boostResult.isComplete
+  //     }, 'Boost corrections applied for page');
 
-      return {
-        pageNumber,
-        rawText: extractionResult.text,
-        boostedText: boostResult.boostedText,
-        extractionComplete: extractionResult.isComplete,
-        boostComplete: boostResult.isComplete
-      };
+  //     return {
+  //       pageNumber,
+  //       rawText: extractionResult.text,
+  //       boostedText: boostResult.boostedText,
+  //       extractionComplete: extractionResult.isComplete,
+  //       boostComplete: boostResult.isComplete
+  //     };
 
-    } catch (error) {
-      logger.error({
-        error: error instanceof Error ? error.message : error,
-        pageNumber
-      }, 'Page processing failed');
-      throw error;
-    }
-  }
+  //   } catch (error) {
+  //     logger.error({
+  //       error: error instanceof Error ? error.message : error,
+  //       pageNumber
+  //     }, 'Page processing failed');
+  //     throw error;
+  //   }
+  // }
 
   /**
    * Process all pages of a PDF in parallel - CORRECT FLOW
