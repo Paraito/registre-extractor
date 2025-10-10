@@ -493,11 +493,18 @@ export class ExtractionWorker {
         .from(bucketName)
         .getPublicUrl(storagePath);
 
+      // Determine final status based on document source
+      // plan_cadastraux documents skip OCR and go directly to EXTRACTION_COMPLETE (status 5)
+      // Other documents (index, acte) go to COMPLETE (status 3) for OCR processing
+      const finalStatus = job.document_source === 'plan_cadastraux'
+        ? EXTRACTION_STATUS.EXTRACTION_COMPLETE
+        : EXTRACTION_STATUS.COMPLETE;
+
       // Update job as completed
       await client
         .from('extraction_queue')
         .update({
-          status_id: EXTRACTION_STATUS.COMPLETE,
+          status_id: finalStatus,
           supabase_path: publicUrl,
           attemtps: (job.attemtps || 0) + 1,
         })
@@ -515,8 +522,12 @@ export class ExtractionWorker {
         environment,
         documentUrl: publicUrl,
         bucketName,
-        fileName
-      }, 'Job completed successfully');
+        fileName,
+        finalStatus,
+        skipOCR: job.document_source === 'plan_cadastraux'
+      }, job.document_source === 'plan_cadastraux'
+        ? 'Job completed successfully (plan_cadastraux - OCR skipped, status set to EXTRACTION_COMPLETE)'
+        : 'Job completed successfully');
       
     } catch (error) {
       logger.error({ 

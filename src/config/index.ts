@@ -47,6 +47,12 @@ const envSchema = z.object({
   OCR_POLL_INTERVAL_MS: z.string().transform(Number).default('10000'),
   OCR_TEMP_DIR: z.string().default('/tmp/ocr-processing'),
 
+  // Acte OCR Configuration (uses File API)
+  ACTE_OCR_EXTRACT_MODEL: z.string().default('gemini-2.0-flash-exp'),
+  ACTE_OCR_BOOST_MODEL: z.string().default('gemini-2.5-pro'),
+  ACTE_OCR_EXTRACT_TEMPERATURE: z.string().transform(Number).default('0.1'),
+  ACTE_OCR_BOOST_TEMPERATURE: z.string().transform(Number).default('0.2'),
+
   // OCR Environment Control
   OCR_PROD: z.string().transform(val => val !== 'false').default('true'),
   OCR_STAGING: z.string().transform(val => val !== 'false').default('true'),
@@ -150,6 +156,12 @@ export const config = {
       prod: env.OCR_PROD,
       staging: env.OCR_STAGING,
       dev: env.OCR_DEV,
+    },
+    acte: {
+      extractModel: env.ACTE_OCR_EXTRACT_MODEL,
+      boostModel: env.ACTE_OCR_BOOST_MODEL,
+      extractTemperature: env.ACTE_OCR_EXTRACT_TEMPERATURE,
+      boostTemperature: env.ACTE_OCR_BOOST_TEMPERATURE,
     },
   },
 };
