@@ -5,6 +5,7 @@ import { OCRProcessor } from './processor';
 import { ActeOCRProcessor } from './acte-processor';
 import { OCRLogger } from './ocr-logger';
 import { staleOCRMonitor } from './stale-ocr-monitor';
+import { sanitizeOCRResult } from './sanitizer';
 import { config } from '../config';
 import fs from 'fs/promises';
 import path from 'path';
@@ -389,16 +390,27 @@ export class OCRMonitor {
       });
 
       // Store both raw and boosted text
-      // file_content: Raw OCR output from Gemini Vision AI (concatenated from all pages)
-      // boosted_file_content: Enhanced text with 60+ correction rules applied (to full concatenated text)
+      // file_content: Clean JSON structure with inscriptions (sanitized from boosted text)
+      // boosted_file_content: Enhanced text with 60+ correction rules applied (verbose, for logging)
       const rawText = ocrResult.combinedRawText;
       const boostedText = ocrResult.combinedBoostedText;
+
+      // NEW: Sanitize boosted text to clean JSON
+      logger.info({ documentId: document.id }, 'Sanitizing OCR result to JSON');
+      const sanitizedJSON = sanitizeOCRResult(boostedText);
+      const cleanJSON = JSON.stringify(sanitizedJSON, null, 2);
+
+      logger.info({
+        documentId: document.id,
+        totalPages: sanitizedJSON.pages.length,
+        totalInscriptions: sanitizedJSON.pages.reduce((sum, p) => sum + p.inscriptions.length, 0)
+      }, 'OCR sanitization complete');
 
       // Try to update with both fields first
       let updateError = null;
       let updateData: any = {
-        file_content: rawText,
-        boosted_file_content: boostedText,
+        file_content: cleanJSON,                    // CHANGED: Now clean JSON instead of raw text
+        boosted_file_content: boostedText,          // UNCHANGED: Verbose for logging
         status_id: EXTRACTION_STATUS.EXTRACTION_COMPLETE, // Status 5
         ocr_completed_at: new Date().toISOString(),
         ocr_error: null, // Clear any previous OCR errors
@@ -414,12 +426,12 @@ export class OCRMonitor {
       if (firstError && firstError.code === 'PGRST204' && firstError.message?.includes('boosted_file_content')) {
         OCRLogger.warning('boosted_file_content column not found', {
           'Migration': '004 not applied',
-          'Action': 'Saving only file_content'
+          'Action': 'Saving only clean JSON in file_content'
         });
 
-        // Retry without boosted_file_content
+        // Retry without boosted_file_content (still use clean JSON)
         updateData = {
-          file_content: rawText,
+          file_content: cleanJSON,  // CHANGED: Use clean JSON instead of raw text
           status_id: EXTRACTION_STATUS.EXTRACTION_COMPLETE, // Status 5
           ocr_completed_at: new Date().toISOString(),
           ocr_error: null, // Clear any previous OCR errors

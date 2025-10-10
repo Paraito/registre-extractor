@@ -17,6 +17,7 @@ export { ActeOCRProcessor, ActeOCRProcessorConfig, ActeOCRResult } from './acte-
 export { OCRMonitor, OCRMonitorConfig } from './monitor';
 export { StaleOCRMonitor, staleOCRMonitor } from './stale-ocr-monitor';
 export { OCRLogger } from './ocr-logger';
+export { sanitizeOCRResult } from './sanitizer';
 export { EXTRACT_PROMPT, BOOST_PROMPT } from './prompts';
 export { ACTE_EXTRACT_PROMPT, ACTE_BOOST_PROMPT } from './prompts-acte';
 

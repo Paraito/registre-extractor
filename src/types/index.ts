@@ -137,3 +137,6 @@ export class DataValidationError extends Error {
     this.name = 'DataValidationError';
   }
 }
+
+// Export OCR sanitization types
+export * from './ocr';
