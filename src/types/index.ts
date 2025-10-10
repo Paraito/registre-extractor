@@ -33,7 +33,7 @@ export interface ExtractionQueueJob {
   cadastre?: string;
   designation_secondaire?: string;
   acte_type?: 'Acte' | 'Avis d\'adresse' | 'Radiation' | 'Acte divers';
-  status_id?: number; // 1='En attente', 2='En traitement', 3='Complété', 4='Erreur', 5='Extraction Complété'
+  status_id?: number; // 1='En attente', 2='En traitement', 3='Complété', 4='Erreur', 5='Extraction Complété', 6='OCR en traitement'
   worker_id?: string;
   attemtps?: number; // Note: typo in database column name
   max_attempts?: number;
@@ -48,15 +48,24 @@ export interface ExtractionQueueJob {
   created_at: string;
   updated_at: string;
   processing_started_at?: string;
+  // OCR tracking fields
+  ocr_worker_id?: string;
+  ocr_started_at?: string;
+  ocr_completed_at?: string;
+  ocr_attempts?: number;
+  ocr_max_attempts?: number;
+  ocr_error?: string;
+  ocr_last_error_at?: string;
 }
 
 // Status mapping constants for easy reference
 export const EXTRACTION_STATUS = {
-  EN_ATTENTE: 1,
-  EN_TRAITEMENT: 2,
-  COMPLETE: 3,
-  ERREUR: 4,
-  EXTRACTION_COMPLETE: 5
+  EN_ATTENTE: 1,           // En attente
+  EN_TRAITEMENT: 2,        // En traitement
+  COMPLETE: 3,             // Complété (extraction done, ready for OCR)
+  ERREUR: 4,               // Erreur
+  EXTRACTION_COMPLETE: 5,  // Extraction Complété (OCR done)
+  OCR_PROCESSING: 6        // OCR en traitement (OCR in progress)
 } as const;
 
 export interface WorkerAccount {

@@ -1,253 +1,264 @@
-# Parallel OCR Processing - Implementation Summary
+# OCR Stuck Job Recovery - Implementation Summary
 
-## ✅ What Was Done
+## ✅ Requirements Completed
 
-I've successfully implemented **parallel OCR processing** for multi-page PDF documents in your registre-extractor project. This enhancement allows the system to process all pages of a document simultaneously instead of sequentially, providing significant performance improvements.
+### 1. ✅ Ensure `ocr_completed_at` is updated when job completes
 
-## 🚀 Key Features
+**Status:** Already implemented in `src/ocr/monitor.ts` (line 293)
 
-### 1. Parallel Processing
-- **All pages processed simultaneously** - Extract and boost text from all pages at once
-- **~5x faster** for multi-page documents
-- **Automatic page detection** - Detects number of pages using pdfinfo or ImageMagick
-- **Concurrent API calls** - Leverages Promise.all() for parallel execution
-
-### 2. Backward Compatibility
-- **All existing methods unchanged** - Your current code continues to work
-- **New parallel methods added** - Opt-in to parallel processing when needed
-- **Same configuration** - Uses existing OCRProcessor configuration
-
-### 3. Comprehensive Documentation
-- **Full API reference** - Complete documentation of all new methods
-- **Usage examples** - Working code examples for common scenarios
-- **Architecture diagrams** - Visual representation of processing flow
-- **Quick start guide** - Get started in 5 minutes
-
-## 📁 Files Modified
-
-### Core Implementation
-1. **`src/ocr/pdf-converter.ts`**
-   - Added `getPageCount()` - Detect number of pages in PDF
-   - Added `convertAllPagesToImages()` - Convert all pages in parallel
-   - Added `convertPageToImage()` - Convert specific page
-   - Updated internal methods to support page numbers
-
-2. **`src/ocr/processor.ts`**
-   - Added `processPDFParallel()` - Main parallel processing method
-   - Added `processPDFFromURLParallel()` - Process from URL in parallel
-   - Added `processPDFFromBase64Parallel()` - Process from base64 in parallel
-   - Added `processPage()` - Internal method for single page processing
-   - Maintained all existing methods for backward compatibility
-
-3. **`src/ocr/index.ts`**
-   - Exported new types: `MultiPageConversionResult`, `PageOCRResult`, `MultiPageOCRResult`
-
-### Documentation
-4. **`src/ocr/PARALLEL_PROCESSING.md`** ⭐ Main documentation
-   - Complete API reference
-   - Usage examples
-   - Performance comparison
-   - Best practices
-   - Migration guide
-
-5. **`src/ocr/ARCHITECTURE.md`** - Visual architecture diagrams
-6. **`src/ocr/QUICKSTART_PARALLEL.md`** - Quick start guide
-7. **`src/ocr/README.md`** - Updated with parallel processing section
-8. **`PARALLEL_OCR_CHANGES.md`** - Detailed change log
-
-### Examples & Tests
-9. **`src/ocr/examples/parallel-processing-example.ts`** - Working examples
-10. **`src/ocr/__tests__/parallel-processing.test.ts`** - Unit tests
-
-## 🎯 How to Use
-
-### Quick Example
-
+When an OCR job completes successfully, the following fields are updated:
 ```typescript
-import { OCRProcessor } from './ocr';
-
-// Initialize
-const processor = new OCRProcessor({
-  geminiApiKey: process.env.GEMINI_API_KEY
-});
-await processor.initialize();
-
-// Process all pages in parallel (NEW!)
-const result = await processor.processPDFParallel('/path/to/document.pdf');
-
-console.log(`Processed ${result.totalPages} pages`);
-console.log(result.combinedBoostedText); // All pages combined
-
-// Access individual pages
-result.pages.forEach(page => {
-  console.log(`Page ${page.pageNumber}: ${page.boostedText}`);
-});
-```
-
-### Backward Compatible
-
-```typescript
-// Old code still works exactly the same
-const result = await processor.processPDF('/path/to/document.pdf');
-console.log(result.boostedText); // First page only
-```
-
-## 📊 Performance Improvement
-
-| Document Size | Sequential | Parallel | Speedup |
-|--------------|-----------|----------|---------|
-| 1 page | 10s | 10s | 1x (same) |
-| 3 pages | 30s | 10s | **3x faster** |
-| 5 pages | 50s | 10s | **5x faster** |
-| 10 pages | 100s | 15s | **6.7x faster** |
-
-## 🔧 New API Methods
-
-### OCRProcessor
-
-#### `processPDFParallel(pdfPath: string): Promise<MultiPageOCRResult>`
-Process all pages of a PDF in parallel.
-
-#### `processPDFFromURLParallel(url: string): Promise<MultiPageOCRResult>`
-Download and process a PDF from URL in parallel.
-
-#### `processPDFFromBase64Parallel(base64Data: string): Promise<MultiPageOCRResult>`
-Process a PDF from base64 data in parallel.
-
-### PDFConverter
-
-#### `getPageCount(pdfPath: string): Promise<number>`
-Get the number of pages in a PDF.
-
-#### `convertAllPagesToImages(pdfPath: string, options?): Promise<MultiPageConversionResult>`
-Convert all pages to images in parallel.
-
-#### `convertPageToImage(pdfPath: string, pageNumber: number, options?): Promise<ConversionResult>`
-Convert a specific page to an image.
-
-## 📦 New Types
-
-```typescript
-interface MultiPageOCRResult {
-  pages: PageOCRResult[];           // Individual page results
-  totalPages: number;                // Total number of pages
-  combinedRawText: string;           // All raw text combined
-  combinedBoostedText: string;       // All boosted text combined
-  allPagesComplete: boolean;         // True if all succeeded
-}
-
-interface PageOCRResult {
-  pageNumber: number;                // Page number (1-indexed)
-  rawText: string;                   // Raw extracted text
-  boostedText: string;               // Boosted text
-  extractionComplete: boolean;       // Extraction status
-  boostComplete: boolean;            // Boost status
-}
-
-interface MultiPageConversionResult {
-  pages: ConversionResult[];         // Conversion results
-  totalPages: number;                // Total pages converted
+{
+  file_content: rawText,
+  boosted_file_content: boostedText,
+  status_id: EXTRACTION_STATUS.EXTRACTION_COMPLETE, // Status 5
+  ocr_completed_at: new Date().toISOString(), // ✅ Completion timestamp
+  ocr_error: null,
+  updated_at: new Date().toISOString()
 }
 ```
 
-## ✨ Benefits
+### 2. ✅ Automatic pickup for stuck OCR jobs
 
-1. **Massive Performance Gains** - Up to 5x faster for multi-page documents
-2. **Better Resource Utilization** - Leverages concurrent API calls
-3. **Backward Compatible** - No breaking changes to existing code
-4. **Flexible** - Choose sequential or parallel based on your needs
-5. **Well Documented** - Comprehensive guides and examples
-6. **Tested** - Unit tests included
-7. **Production Ready** - Error handling and cleanup included
+**Status:** Newly implemented
 
-## 🔍 Technical Details
+Created automatic recovery system that resets jobs stuck in `status_id = 6` (OCR_PROCESSING) back to `status_id = 3` (COMPLETE) for retry.
 
-### Parallel Execution Flow
-1. **Detect pages** - Use pdfinfo or ImageMagick to count pages
-2. **Convert in parallel** - All pages converted to images simultaneously
-3. **Process in parallel** - All pages sent to Gemini API concurrently
-4. **Combine results** - Merge all page results into single output
+## 📁 Files Created
 
-### Resource Management
-- Temporary image files created for each page
-- All files cleaned up automatically after processing
-- Memory usage scales linearly with page count
-- API calls respect rate limits
+### 1. `src/ocr/stale-ocr-monitor.ts` (NEW)
+- Background monitor that checks for stuck OCR jobs every 60 seconds
+- Resets jobs stuck in OCR processing for more than 10 minutes
+- Automatically started/stopped with the main OCR monitor
+- Provides structured logging with OCRLogger
 
-## 📚 Documentation Structure
+**Key Features:**
+- Configurable check interval (default: 60s)
+- Configurable stale threshold (default: 10 minutes)
+- Runs across all configured Supabase environments
+- Singleton instance exported for easy use
 
-```
-src/ocr/
-├── README.md                          # Main OCR documentation (updated)
-├── PARALLEL_PROCESSING.md             # Detailed parallel processing guide
-├── ARCHITECTURE.md                    # Architecture diagrams
-├── QUICKSTART_PARALLEL.md             # Quick start guide
-├── examples/
-│   └── parallel-processing-example.ts # Working examples
-└── __tests__/
-    └── parallel-processing.test.ts    # Unit tests
-```
+### 2. `reset-stuck-ocr-jobs.ts` (NEW)
+- Manual script to immediately reset stuck OCR jobs
+- Can reset all stuck jobs or check specific job by ID
+- Provides detailed output with job information
 
-## 🎓 Next Steps
-
-### To Start Using Parallel Processing:
-
-1. **Read the quick start guide**
-   ```bash
-   cat src/ocr/QUICKSTART_PARALLEL.md
-   ```
-
-2. **Try the examples**
-   ```bash
-   export GEMINI_API_KEY="your-key"
-   npx ts-node src/ocr/examples/parallel-processing-example.ts
-   ```
-
-3. **Update your code** (optional)
-   ```typescript
-   // Change from:
-   const result = await processor.processPDF(pdfPath);
-   
-   // To:
-   const result = await processor.processPDFParallel(pdfPath);
-   ```
-
-### Optional Enhancements:
-
-- Update `OCRMonitor` to use parallel processing for multi-page documents
-- Add progress callbacks for real-time updates
-- Implement batching for very large documents (100+ pages)
-- Add caching to avoid re-processing
-
-## ✅ Testing
-
-All code compiles without errors:
+**Usage:**
 ```bash
-# No TypeScript errors
-✓ src/ocr/pdf-converter.ts
-✓ src/ocr/processor.ts
-✓ src/ocr/index.ts
-✓ src/ocr/examples/parallel-processing-example.ts
-✓ src/ocr/__tests__/parallel-processing.test.ts
+# Reset all stuck OCR jobs
+npm run reset-stuck-ocr-jobs
+
+# Check specific job
+npm run reset-stuck-ocr-jobs -- --job-id <job-id>
 ```
 
-Run tests:
+### 3. `test-ocr-recovery.ts` (NEW)
+- Automated test to verify the recovery system works
+- Simulates a stuck OCR job and verifies it gets reset
+- Cleans up after itself
+
+**Usage:**
 ```bash
-npm test src/ocr/__tests__/parallel-processing.test.ts
+npm run test:ocr-recovery
 ```
+
+### 4. `augment_work_docs/OCR_STUCK_JOB_RECOVERY.md` (NEW)
+- Comprehensive documentation of the recovery system
+- Includes monitoring queries, configuration, and best practices
+- Status flow diagram showing the complete lifecycle
+
+## 📝 Files Modified
+
+### 1. `src/ocr/monitor.ts`
+**Changes:**
+- Added import for `staleOCRMonitor`
+- Start stale OCR monitor when OCR monitor starts
+- Stop stale OCR monitor when OCR monitor stops
+
+**Lines Modified:**
+- Line 6: Added import
+- Line 64: Start stale monitor
+- Line 82: Stop stale monitor
+
+### 2. `src/ocr/index.ts`
+**Changes:**
+- Export `StaleOCRMonitor` class and `staleOCRMonitor` singleton
+
+**Lines Modified:**
+- Line 12: Added export
+
+### 3. `package.json`
+**Changes:**
+- Added `reset-stuck-ocr-jobs` script
+- Added `test:ocr-recovery` script
+
+**Lines Modified:**
+- Line 28: Added reset script
+- Line 31: Added test script
+
+## 🔄 How It Works
+
+### Normal Flow (Success)
+```
+status_id = 3 (COMPLETE)
+    ↓ OCR Monitor picks up
+status_id = 6 (OCR_PROCESSING)
+    ↓ OCR completes successfully
+status_id = 5 (EXTRACTION_COMPLETE)
+    ✅ ocr_completed_at = NOW()
+```
+
+### Recovery Flow (Stuck Job)
+```
+status_id = 6 (OCR_PROCESSING)
+    ↓ Stuck for > 10 minutes
+Stale OCR Monitor detects
+    ↓ Automatic reset
+status_id = 3 (COMPLETE)
+    ↓ OCR Monitor picks up again
+status_id = 6 (OCR_PROCESSING)
+    ↓ Retry...
+```
+
+## 🎯 Key Features
+
+1. **Automatic Recovery:** No manual intervention needed for stuck jobs
+2. **Configurable Thresholds:** Adjust timing based on your needs
+3. **Multi-Environment:** Works across all configured Supabase environments
+4. **Retry Limits:** Respects `ocr_max_attempts` to prevent infinite loops
+5. **Detailed Logging:** Structured logs with OCRLogger for easy monitoring
+6. **Manual Override:** Script available for immediate intervention
+7. **Testable:** Automated test to verify functionality
+
+## 📊 Monitoring
+
+### Check for Currently Stuck Jobs
+```sql
+SELECT 
+  id, 
+  document_number, 
+  ocr_worker_id, 
+  ocr_started_at,
+  EXTRACT(EPOCH FROM (NOW() - ocr_started_at)) / 60 as stuck_minutes
+FROM extraction_queue
+WHERE status_id = 6
+  AND ocr_started_at < NOW() - INTERVAL '10 minutes'
+ORDER BY ocr_started_at ASC;
+```
+
+### Check Auto-Recovered Jobs
+```sql
+SELECT 
+  id, 
+  document_number, 
+  ocr_error,
+  ocr_last_error_at,
+  ocr_attempts
+FROM extraction_queue
+WHERE ocr_error LIKE '%Reset by stale OCR monitor%'
+ORDER BY ocr_last_error_at DESC
+LIMIT 20;
+```
+
+## 🧪 Testing
+
+Run the automated test:
+```bash
+npm run test:ocr-recovery
+```
+
+Expected output:
+```
+🧪 Testing OCR Stuck Job Recovery System
+============================================================
+📊 Using environment: production
+
+Step 1: Finding a test job...
+✅ Found test job: abc-123
+
+Step 2: Simulating stuck OCR job...
+✅ Job simulated as stuck
+
+Step 3: Running stale OCR monitor...
+✅ Stale OCR monitor completed
+
+Step 4: Verifying job was reset...
+✅ SUCCESS: Job was correctly reset!
+
+Step 5: Cleaning up...
+✅ Restored job to original state
+
+============================================================
+✅ TEST PASSED
+============================================================
+```
+
+## 🚀 Deployment
+
+The stale OCR monitor is automatically integrated with the OCR monitor:
+
+```bash
+# Development
+npm run ocr:dev
+
+# Production
+npm run ocr
+```
+
+No additional configuration or deployment steps required!
+
+## 📈 Benefits
+
+1. **Reliability:** Jobs never get permanently stuck
+2. **Resilience:** Automatic recovery from crashes and failures
+3. **Visibility:** Clear logging of stuck jobs and recoveries
+4. **Maintainability:** Easy to monitor and debug
+5. **Testability:** Automated tests ensure it works correctly
+
+## 🔧 Configuration Options
+
+### Default Settings
+- **Check Interval:** 60 seconds
+- **Stale Threshold:** 10 minutes
+- **Max Attempts:** 3 (from database `ocr_max_attempts`)
+
+### Custom Configuration
+```typescript
+import { StaleOCRMonitor } from './src/ocr/stale-ocr-monitor';
+
+const customMonitor = new StaleOCRMonitor(
+  30000,  // Check every 30 seconds
+  300000  // 5 minute threshold
+);
+
+customMonitor.start();
+```
+
+## 📚 Related Documentation
+
+- `augment_work_docs/OCR_STUCK_JOB_RECOVERY.md` - Detailed documentation
+- `augment_work_docs/OCR_TRACKING_ENHANCEMENT.md` - OCR tracking fields
+- `src/ocr/README.md` - OCR module overview
+
+## ✅ Checklist
+
+- [x] `ocr_completed_at` updated on job completion
+- [x] Automatic stuck job detection
+- [x] Automatic reset to `status_id = 3`
+- [x] Integrated with OCR monitor lifecycle
+- [x] Manual recovery script
+- [x] Automated test
+- [x] Comprehensive documentation
+- [x] Structured logging
+- [x] Multi-environment support
+- [x] Respects retry limits
 
 ## 🎉 Summary
 
-The parallel OCR processing feature is **fully implemented, tested, and documented**. It provides significant performance improvements while maintaining complete backward compatibility. You can start using it immediately or continue using the existing sequential processing - both work perfectly!
+Both requirements have been fully implemented:
 
-### Key Achievements:
-- ✅ Parallel processing implemented
-- ✅ Backward compatibility maintained
-- ✅ Comprehensive documentation created
-- ✅ Working examples provided
-- ✅ Unit tests written
-- ✅ No breaking changes
-- ✅ Production ready
+1. ✅ **`ocr_completed_at` is updated** when jobs complete (already existed)
+2. ✅ **Stuck jobs are automatically picked up** and reset to `status_id = 3` for retry
 
-**The system is ready to process multi-page documents up to 5x faster!** 🚀
+The system is production-ready and will automatically recover from OCR job failures!
 

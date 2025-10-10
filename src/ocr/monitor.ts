@@ -2,6 +2,8 @@ import { supabaseManager, EnvironmentName } from '../utils/supabase';
 import { logger } from '../utils/logger';
 import { EXTRACTION_STATUS, ExtractionQueueJob } from '../types';
 import { OCRProcessor } from './processor';
+import { OCRLogger } from './ocr-logger';
+import { staleOCRMonitor } from './stale-ocr-monitor';
 import { config } from '../config';
 import fs from 'fs/promises';
 import path from 'path';
@@ -31,14 +33,14 @@ export class OCRMonitor {
 
     this.pollIntervalMs = config.pollIntervalMs || 10000; // Default: 10 seconds
 
-    logger.info({
+    logger.debug({
       pollIntervalMs: this.pollIntervalMs
     }, 'OCR Monitor initialized');
   }
 
   async initialize(): Promise<void> {
     await this.processor.initialize();
-    logger.info('OCR Monitor ready');
+    logger.debug('OCR Monitor ready');
   }
 
   /**
@@ -56,14 +58,11 @@ export class OCRMonitor {
     const enabledEnvs = Object.entries(config.ocr.enabledEnvironments)
       .filter(([_, enabled]) => enabled)
       .map(([env]) => env);
-    const disabledEnvs = Object.entries(config.ocr.enabledEnvironments)
-      .filter(([_, enabled]) => !enabled)
-      .map(([env]) => env);
 
-    logger.info({
-      enabledEnvironments: enabledEnvs,
-      disabledEnvironments: disabledEnvs
-    }, 'OCR Monitor started');
+    OCRLogger.monitorStarted(enabledEnvs);
+
+    // Start the stale OCR job monitor
+    staleOCRMonitor.start();
 
     // Start the polling loop
     this.poll();
@@ -79,6 +78,9 @@ export class OCRMonitor {
       clearTimeout(this.pollTimeout);
       this.pollTimeout = null;
     }
+
+    // Stop the stale OCR job monitor
+    staleOCRMonitor.stop();
 
     await this.processor.cleanup();
     logger.info('OCR Monitor stopped');
@@ -129,15 +131,15 @@ export class OCRMonitor {
 
       try {
         // Find documents with status_id=3 (COMPLETE) and document_source='index'
-        // that haven't been OCR processed yet (file_content is null)
+        // Status ID is the source of truth - if it's 3, it needs OCR processing
+        // We'll filter by ocr_attempts in-memory since PostgREST doesn't support column-to-column comparison
         const { data: documents, error } = await client
           .from('extraction_queue')
           .select('*')
           .eq('status_id', EXTRACTION_STATUS.COMPLETE)
           .eq('document_source', 'index')
-          .is('file_content', null)
           .order('created_at', { ascending: true })
-          .limit(1);
+          .limit(10); // Get a few candidates to filter in-memory
 
         if (error) {
           logger.error({ error, environment: env }, 'Error querying for documents needing OCR');
@@ -148,13 +150,29 @@ export class OCRMonitor {
           continue; // No documents to process in this environment
         }
 
-        const document = documents[0];
+        // Filter documents that haven't exceeded max OCR attempts
+        const eligibleDocuments = documents.filter(doc => {
+          const attempts = doc.ocr_attempts || 0;
+          const maxAttempts = doc.ocr_max_attempts || 3;
+          return attempts < maxAttempts;
+        });
 
-        logger.info({
-          documentId: document.id,
-          documentNumber: document.document_number,
-          environment: env
-        }, 'Found document needing OCR processing');
+        // Log if documents were skipped due to max attempts
+        const skippedCount = documents.length - eligibleDocuments.length;
+        if (skippedCount > 0) {
+          logger.debug({
+            environment: env,
+            totalFound: documents.length,
+            skippedDueToMaxAttempts: skippedCount,
+            eligible: eligibleDocuments.length
+          }, 'Some documents skipped due to max OCR attempts reached');
+        }
+
+        if (eligibleDocuments.length === 0) {
+          continue; // No eligible documents in this environment
+        }
+
+        const document = eligibleDocuments[0];
 
         // Process this document
         await this.processDocument(document, env);
@@ -178,20 +196,36 @@ export class OCRMonitor {
     document: ExtractionQueueJob,
     environment: EnvironmentName
   ): Promise<void> {
+    const startTime = Date.now();
     const client = supabaseManager.getServiceClient(environment);
     if (!client) {
       logger.error({ environment }, 'No Supabase client for environment');
       return;
     }
 
-    logger.info({
-      documentId: document.id,
-      documentNumber: document.document_number,
-      supabasePath: document.supabase_path,
-      environment
-    }, 'Starting OCR processing for document');
+    OCRLogger.documentStart(document.document_number, environment, document.id);
+
+    // Generate worker ID (could be made configurable)
+    const workerIdValue = process.env.OCR_WORKER_ID || 'ocr-monitor-1';
 
     try {
+      // Mark job as OCR in-progress before processing
+      const { error: updateStartError } = await client
+        .from('extraction_queue')
+        .update({
+          status_id: EXTRACTION_STATUS.OCR_PROCESSING,
+          ocr_worker_id: workerIdValue,
+          ocr_started_at: new Date().toISOString(),
+          ocr_attempts: (document.ocr_attempts || 0) + 1,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', document.id);
+
+      if (updateStartError) {
+        logger.error({ error: updateStartError, documentId: document.id }, 'Failed to mark job as OCR in-progress');
+        // Continue anyway - this is not critical
+      }
+
       // Validate that we have a PDF path
       if (!document.supabase_path) {
         throw new Error('Document has no supabase_path');
@@ -215,12 +249,6 @@ export class OCRMonitor {
         storagePath = storagePath.substring(bucketName.length + 1);
       }
 
-      logger.info({
-        documentId: document.id,
-        bucketName,
-        storagePath
-      }, 'Downloading PDF from private bucket');
-
       // Download the PDF from private bucket using authenticated client
       const { data: pdfData, error: downloadError } = await client.storage
         .from(bucketName)
@@ -240,25 +268,27 @@ export class OCRMonitor {
       const buffer = Buffer.from(arrayBuffer);
       await fs.writeFile(tempPath, buffer);
 
-      logger.info({
+      logger.debug({
         documentId: document.id,
-        tempPath,
         fileSize: buffer.length
-      }, 'PDF downloaded successfully');
+      }, 'PDF downloaded');
 
-      // Process the PDF from the local file
-      const ocrResult = await this.processor.processPDF(tempPath);
+      // Process the PDF using PARALLEL processing with CORRECT flow:
+      // Step 1: Extract raw text from all pages (parallel)
+      // Step 2: CONCATENATE all raw text
+      // Step 3: Apply boost to FULL concatenated raw text
+      const ocrResult = await this.processor.processPDFParallel(tempPath);
 
       // Clean up temp file
       await fs.unlink(tempPath).catch(err => {
-        logger.warn({ error: err, tempPath }, 'Failed to clean up temp PDF');
+        logger.debug({ error: err }, 'Failed to clean up temp PDF');
       });
 
       // Store both raw and boosted text
-      // file_content: Raw OCR output from Gemini Vision AI (unprocessed)
-      // boosted_file_content: Enhanced text with 60+ correction rules applied
-      const rawText = ocrResult.rawText;
-      const boostedText = ocrResult.boostedText;
+      // file_content: Raw OCR output from Gemini Vision AI (concatenated from all pages)
+      // boosted_file_content: Enhanced text with 60+ correction rules applied (to full concatenated text)
+      const rawText = ocrResult.combinedRawText;
+      const boostedText = ocrResult.combinedBoostedText;
 
       // Try to update with both fields first
       let updateError = null;
@@ -266,6 +296,8 @@ export class OCRMonitor {
         file_content: rawText,
         boosted_file_content: boostedText,
         status_id: EXTRACTION_STATUS.EXTRACTION_COMPLETE, // Status 5
+        ocr_completed_at: new Date().toISOString(),
+        ocr_error: null, // Clear any previous OCR errors
         updated_at: new Date().toISOString()
       };
 
@@ -276,15 +308,17 @@ export class OCRMonitor {
 
       // If boosted_file_content column doesn't exist, fall back to just file_content
       if (firstError && firstError.code === 'PGRST204' && firstError.message?.includes('boosted_file_content')) {
-        logger.warn({
-          documentId: document.id,
-          environment
-        }, 'boosted_file_content column not found, saving only file_content (migration 004 not applied)');
+        OCRLogger.warning('boosted_file_content column not found', {
+          'Migration': '004 not applied',
+          'Action': 'Saving only file_content'
+        });
 
         // Retry without boosted_file_content
         updateData = {
           file_content: rawText,
           status_id: EXTRACTION_STATUS.EXTRACTION_COMPLETE, // Status 5
+          ocr_completed_at: new Date().toISOString(),
+          ocr_error: null, // Clear any previous OCR errors
           updated_at: new Date().toISOString()
         };
 
@@ -302,31 +336,30 @@ export class OCRMonitor {
         throw updateError;
       }
 
-      logger.info({
-        documentId: document.id,
-        documentNumber: document.document_number,
-        rawTextLength: rawText.length,
-        boostedTextLength: boostedText.length,
-        extractionComplete: ocrResult.extractionComplete,
-        boostComplete: ocrResult.boostComplete,
-        environment
-      }, 'OCR processing completed successfully');
+      const totalDuration = (Date.now() - startTime) / 1000;
+      OCRLogger.documentComplete(
+        document.document_number,
+        environment,
+        ocrResult.totalPages,
+        rawText.length,
+        boostedText.length,
+        totalDuration
+      );
 
     } catch (error) {
-      logger.error({
-        error: error instanceof Error ? error.message : error,
-        documentId: document.id,
-        documentNumber: document.document_number,
-        environment
-      }, 'OCR processing failed for document');
+      const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+      OCRLogger.documentError(document.document_number, environment, errorMsg, document.id);
 
-      // Optionally: Update document with error information
-      // For now, we'll leave it in status 3 so it can be retried
+      // Update document with error information
+      // Revert status to COMPLETE so it can be retried (if under max attempts)
       try {
         await client
           .from('extraction_queue')
           .update({
-            error_message: `OCR processing failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            status_id: EXTRACTION_STATUS.COMPLETE, // Revert to ready for retry
+            ocr_error: `OCR processing failed: ${errorMsg}`,
+            ocr_last_error_at: new Date().toISOString(),
+            error_message: `OCR processing failed: ${errorMsg}`, // Keep for backward compatibility
             updated_at: new Date().toISOString()
           })
           .eq('id', document.id);

@@ -3,6 +3,7 @@ import { promisify } from 'util';
 import fs from 'fs/promises';
 import path from 'path';
 import { logger } from '../utils/logger';
+import { OCRLogger } from './ocr-logger';
 
 const execAsync = promisify(exec);
 
@@ -38,7 +39,18 @@ export class PDFConverter {
     // Ensure temp directory exists
     try {
       await fs.mkdir(this.tempDir, { recursive: true });
-      logger.info({ tempDir: this.tempDir }, 'PDF converter initialized');
+
+      // Use structured logging
+      OCRLogger.incrementMessageCounter();
+      const messageNum = OCRLogger.getMessageCounter();
+      const SEPARATOR = '='.repeat(80);
+
+      console.log('\n' + SEPARATOR);
+      console.log(`📁 PDF Converter Initialized - Message #${messageNum}`);
+      console.log(SEPARATOR);
+      console.log('\n⚙️  Configuration');
+      console.log(`   Temp Directory: ${this.tempDir}`);
+      console.log('\n' + SEPARATOR + '\n');
     } catch (error) {
       logger.error({ error, tempDir: this.tempDir }, 'Failed to create temp directory');
       throw error;
@@ -83,7 +95,7 @@ export class PDFConverter {
     options?: PDFToImageOptions
   ): Promise<MultiPageConversionResult> {
     const pageCount = await this.getPageCount(pdfPath);
-    logger.info({ pdfPath, pageCount }, 'Converting all PDF pages to images');
+    logger.debug({ pdfPath, pageCount }, 'Converting all PDF pages to images');
 
     // Convert all pages in parallel
     const conversionPromises = Array.from({ length: pageCount }, (_, i) =>
@@ -92,7 +104,7 @@ export class PDFConverter {
 
     const pages = await Promise.all(conversionPromises);
 
-    logger.info({
+    logger.debug({
       pdfPath,
       totalPages: pageCount,
       totalSizeKB: Math.round(pages.reduce((sum, p) => sum + p.base64Data.length, 0) / 1024)
@@ -182,8 +194,9 @@ export class PDFConverter {
 
     const { stdout, stderr } = await execAsync(command);
 
-    if (stderr && !stderr.includes('Warning')) {
-      logger.warn({ stderr, pageNumber }, 'ImageMagick conversion warnings');
+    // Only log stderr if it contains actual errors (not deprecation warnings)
+    if (stderr && !stderr.includes('Warning') && !stderr.includes('WARNING') && !stderr.includes('deprecated')) {
+      logger.warn({ stderr, pageNumber }, 'ImageMagick conversion error');
     }
   }
 

@@ -2,6 +2,7 @@ import { GeminiOCRClient } from './gemini-client';
 import { PDFConverter } from './pdf-converter';
 import { EXTRACT_PROMPT, BOOST_PROMPT } from './prompts';
 import { logger } from '../utils/logger';
+import { OCRLogger } from './ocr-logger';
 import fs from 'fs/promises';
 import path from 'path';
 
@@ -61,11 +62,9 @@ export class OCRProcessor {
     this.extractTemperature = config.extractTemperature || 0.1;
     this.boostTemperature = config.boostTemperature || 0.2;
 
-    logger.info({
+    logger.debug({
       extractModel: this.extractModel,
-      boostModel: this.boostModel,
-      extractTemp: this.extractTemperature,
-      boostTemp: this.boostTemperature
+      boostModel: this.boostModel
     }, 'OCR Processor initialized');
   }
 
@@ -74,14 +73,58 @@ export class OCRProcessor {
   }
 
   /**
-   * Process a single page: extract text and apply boost
+   * Extract raw text from a single page (no boost applied)
+   */
+  private async extractPageText(
+    pageNumber: number,
+    base64Data: string,
+    mimeType: string,
+    totalPages?: number
+  ): Promise<{ pageNumber: number; rawText: string; extractionComplete: boolean }> {
+    try {
+      // Extract text from image
+      const extractionResult = await this.geminiClient.extractText(
+        base64Data,
+        mimeType,
+        EXTRACT_PROMPT,
+        {
+          model: this.extractModel,
+          temperature: this.extractTemperature,
+          maxAttempts: 3
+        }
+      );
+
+      // Log progress if totalPages is provided
+      if (totalPages) {
+        OCRLogger.pageExtracted(pageNumber, totalPages, extractionResult.text.length);
+      }
+
+      return {
+        pageNumber,
+        rawText: extractionResult.text,
+        extractionComplete: extractionResult.isComplete
+      };
+
+    } catch (error) {
+      logger.error({
+        error: error instanceof Error ? error.message : error,
+        pageNumber
+      }, `❌ Page ${pageNumber} extraction failed`);
+      throw error;
+    }
+  }
+
+  /**
+   * Process a single page: extract text and apply boost (LEGACY - for sequential processing)
+   * NOTE: This applies boost per-page, which is NOT the recommended approach.
+   * Use processPDFParallel for the correct flow: extract all -> concatenate -> boost once.
    */
   private async processPage(
     pageNumber: number,
     base64Data: string,
     mimeType: string
   ): Promise<PageOCRResult> {
-    logger.info({ pageNumber }, 'Processing page');
+    logger.info({ pageNumber }, 'Processing page (legacy per-page boost)');
 
     try {
       // Step 1: Extract text from image
@@ -102,7 +145,7 @@ export class OCRProcessor {
         isComplete: extractionResult.isComplete
       }, 'Text extraction completed for page');
 
-      // Step 2: Apply boost corrections
+      // Step 2: Apply boost corrections (per-page - not recommended)
       const boostResult = await this.geminiClient.boostText(
         extractionResult.text,
         BOOST_PROMPT,
@@ -137,70 +180,86 @@ export class OCRProcessor {
   }
 
   /**
-   * Process all pages of a PDF in parallel
+   * Process all pages of a PDF in parallel - CORRECT FLOW
+   * Step 1: Extract raw text from all pages (in parallel)
+   * Step 2: CONCATENATE all raw text
+   * Step 3: Apply boost to the FULL concatenated raw text (single boost call)
    */
   async processPDFParallel(pdfPath: string): Promise<MultiPageOCRResult> {
-    logger.info({ pdfPath }, 'Starting parallel OCR processing');
+    const startTime = Date.now();
 
     try {
       // Step 1: Convert all PDF pages to images
-      logger.info({ pdfPath }, 'Converting all PDF pages to images');
+      // Get page count first for logging
+      const pageCount = await this.pdfConverter['getPageCount'](pdfPath);
+      OCRLogger.pdfConversionStart(pageCount);
+
       const conversionResult = await this.pdfConverter.convertAllPagesToImages(pdfPath, {
         dpi: 300,
         format: 'png',
         quality: 95
       });
 
-      logger.info({
-        totalPages: conversionResult.totalPages,
-        totalSizeKB: Math.round(
-          conversionResult.pages.reduce((sum, p) => sum + p.base64Data.length, 0) / 1024
-        )
-      }, 'All PDF pages converted to images');
+      const totalSizeKB = Math.round(
+        conversionResult.pages.reduce((sum, p) => sum + p.base64Data.length, 0) / 1024
+      );
+      OCRLogger.pdfConverted(conversionResult.totalPages, totalSizeKB);
 
-      // Step 2: Process all pages in parallel
-      logger.info({ totalPages: conversionResult.totalPages }, 'Processing all pages in parallel');
-      const pageProcessingPromises = conversionResult.pages.map((page, index) =>
-        this.processPage(index + 1, page.base64Data, page.mimeType)
+      // Step 2: Extract raw text from all pages in parallel (NO BOOST YET)
+      const extractionPromises = conversionResult.pages.map((page, index) =>
+        this.extractPageText(index + 1, page.base64Data, page.mimeType, conversionResult.totalPages)
       );
 
-      const pageResults = await Promise.all(pageProcessingPromises);
+      const extractionResults = await Promise.all(extractionPromises);
 
-      // Step 3: Combine results
-      const combinedRawText = pageResults
+      // Step 3: CONCATENATE all raw text from all pages
+      const combinedRawText = extractionResults
         .map(p => `\n\n--- Page ${p.pageNumber} ---\n\n${p.rawText}`)
         .join('\n');
 
-      const combinedBoostedText = pageResults
-        .map(p => `\n\n--- Page ${p.pageNumber} ---\n\n${p.boostedText}`)
-        .join('\n');
+      const allExtractionComplete = extractionResults.every(p => p.extractionComplete);
 
-      const allPagesComplete = pageResults.every(p => p.extractionComplete && p.boostComplete);
+      OCRLogger.extractionComplete(conversionResult.totalPages, combinedRawText.length);
 
-      logger.info({
-        totalPages: conversionResult.totalPages,
-        allPagesComplete,
-        combinedRawTextLength: combinedRawText.length,
-        combinedBoostedTextLength: combinedBoostedText.length
-      }, 'Parallel OCR processing completed');
+      // Step 4: Apply boost to the FULL concatenated raw text (SINGLE BOOST CALL)
+      const boostResult = await this.geminiClient.boostText(
+        combinedRawText,
+        BOOST_PROMPT,
+        {
+          model: this.boostModel,
+          temperature: this.boostTemperature,
+          maxAttempts: 3
+        }
+      );
+
+      const duration = (Date.now() - startTime) / 1000;
+      OCRLogger.boostComplete(boostResult.boostedText.length, duration);
+
+      // Build per-page results for compatibility (but boost is applied to full text)
+      const pageResults: PageOCRResult[] = extractionResults.map(extraction => ({
+        pageNumber: extraction.pageNumber,
+        rawText: extraction.rawText,
+        boostedText: '', // Individual page boosted text not available in this flow
+        extractionComplete: extraction.extractionComplete,
+        boostComplete: boostResult.isComplete
+      }));
 
       return {
         pages: pageResults,
         totalPages: conversionResult.totalPages,
         combinedRawText,
-        combinedBoostedText,
-        allPagesComplete
+        combinedBoostedText: boostResult.boostedText,
+        allPagesComplete: allExtractionComplete && boostResult.isComplete
       };
 
     } catch (error) {
       logger.error({
         error: error instanceof Error ? error.message : error,
         pdfPath
-      }, 'Parallel OCR processing failed');
+      }, '❌ OCR processing failed');
       throw error;
     } finally {
       // Clean up all temporary image files
-      logger.info('Cleaning up temporary files');
       await this.pdfConverter.cleanupAll();
     }
   }

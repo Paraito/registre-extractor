@@ -89,9 +89,9 @@ npm run ocr
 
 The monitor polls the database every 10 seconds (configurable) looking for documents that meet these criteria:
 
-- `status_id = 3` (Complété - extraction completed)
+- `status_id = 3` (Complété - extraction completed, ready for OCR)
 - `document_source = 'index'` (index documents only)
-- `file_content IS NULL` (not yet OCR processed)
+- `ocr_attempts < ocr_max_attempts` (hasn't exceeded retry limit)
 
 ### 2. PDF Processing
 

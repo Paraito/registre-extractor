@@ -1,5 +1,6 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { logger } from '../utils/logger';
+import { OCRLogger } from './ocr-logger';
 
 export interface GeminiOCRConfig {
   apiKey: string;
@@ -32,12 +33,13 @@ export class GeminiOCRClient {
     this.genAI = new GoogleGenerativeAI(config.apiKey);
     this.defaultModel = config.model || 'gemini-2.0-flash-exp';
     this.defaultTemperature = config.temperature || 0.1;
+    // Use maximum available tokens based on model
+    // Gemini 2.0 Flash: 8,192 tokens max
+    // Gemini 2.5 Pro: 65,536 tokens max
     this.defaultMaxTokens = config.maxOutputTokens || 8192;
 
-    logger.info({
-      model: this.defaultModel,
-      temperature: this.defaultTemperature,
-      maxTokens: this.defaultMaxTokens
+    logger.debug({
+      model: this.defaultModel
     }, 'GeminiOCRClient initialized');
   }
 
@@ -59,8 +61,10 @@ export class GeminiOCRClient {
     const maxAttempts = options?.maxAttempts || 3;
 
     let maxTokens = this.defaultMaxTokens;
-    if (model.includes('pro')) {
-      maxTokens = 32768; // Pro models support more tokens
+    if (model.includes('2.5') && model.includes('pro')) {
+      maxTokens = 65536; // Gemini 2.5 Pro supports up to 65,536 tokens
+    } else if (model.includes('pro')) {
+      maxTokens = 32768; // Older Pro models support 32,768 tokens
     }
 
     const generativeModel = this.genAI.getGenerativeModel({
@@ -93,13 +97,6 @@ export class GeminiOCRClient {
           finalPrompt = `${prompt}\n\n⚠️ CONTINUATION REQUEST: The previous response was truncated. Continue from where you left off and ensure you include the completion marker.`;
         }
 
-        logger.info({
-          attempt: attemptCount,
-          maxAttempts,
-          model,
-          temperature
-        }, 'Extracting text from image');
-
         const result = await generativeModel.generateContent([finalPrompt, imagePart]);
         const response = await result.response;
         const text = response.text();
@@ -109,12 +106,8 @@ export class GeminiOCRClient {
         // Check for completion marker
         if (text.includes('✅ EXTRACTION_COMPLETE:')) {
           isComplete = true;
-          logger.info({ attempt: attemptCount }, 'Extraction completed successfully');
-        } else {
-          logger.warn({
-            attempt: attemptCount,
-            maxAttempts
-          }, 'Response truncated, retrying...');
+        } else if (attemptCount < maxAttempts) {
+          OCRLogger.retryAttempt('Extraction', attemptCount, maxAttempts);
         }
 
       } catch (error) {
@@ -152,8 +145,10 @@ export class GeminiOCRClient {
     const maxAttempts = options?.maxAttempts || 3;
 
     let maxTokens = this.defaultMaxTokens;
-    if (model.includes('pro')) {
-      maxTokens = 32768; // Pro models support more tokens
+    if (model.includes('2.5') && model.includes('pro')) {
+      maxTokens = 65536; // Gemini 2.5 Pro supports up to 65,536 tokens
+    } else if (model.includes('pro')) {
+      maxTokens = 32768; // Older Pro models support 32,768 tokens
     }
 
     const generativeModel = this.genAI.getGenerativeModel({
@@ -180,12 +175,7 @@ export class GeminiOCRClient {
           fullPrompt = `${prompt}\n\n⚠️ CONTINUATION REQUEST: The previous response was truncated. Continue from where you left off and ensure you include the completion marker.\n\n---\n\nTEXTE BRUT À BOOSTER :\n\n${rawText}`;
         }
 
-        logger.info({
-          attempt: attemptCount,
-          maxAttempts,
-          model,
-          temperature
-        }, 'Boosting OCR text');
+        logger.debug({ attempt: attemptCount, model }, 'Boosting text...');
 
         const result = await generativeModel.generateContent(fullPrompt);
         const response = await result.response;
@@ -196,12 +186,8 @@ export class GeminiOCRClient {
         // Check for completion marker
         if (text.includes('✅ BOOST_COMPLETE:')) {
           isComplete = true;
-          logger.info({ attempt: attemptCount }, 'Boost completed successfully');
-        } else {
-          logger.warn({
-            attempt: attemptCount,
-            maxAttempts
-          }, 'Response truncated, retrying...');
+        } else if (attemptCount < maxAttempts) {
+          OCRLogger.retryAttempt('Boost', attemptCount, maxAttempts);
         }
 
       } catch (error) {

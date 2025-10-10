@@ -26,7 +26,9 @@
     "migrate:boosted": "tsx apply-boosted-content-migration.ts",
     "check-redis": "tsx check-redis.ts",
     "reset-stuck-jobs": "tsx reset-stuck-jobs.ts",
-    "test:ocr": "tsx test-ocr-integration.ts"
+    "reset-stuck-ocr-jobs": "tsx reset-stuck-ocr-jobs.ts",
+    "test:ocr": "tsx test-ocr-integration.ts",
+    "test:ocr-recovery": "tsx test-ocr-recovery.ts"
   },
   "keywords": [
     "web-scraping",
