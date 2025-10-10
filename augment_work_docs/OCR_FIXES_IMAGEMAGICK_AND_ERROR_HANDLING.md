@@ -1,5 +1,16 @@
 # OCR Fixes: ImageMagick, Playwright & Error Handling
 
+## 🚀 Quick Start
+
+**To deploy these fixes, run:**
+```bash
+./update-deployment.sh
+```
+
+Or see: [QUICK_UPDATE_GUIDE.md](../QUICK_UPDATE_GUIDE.md)
+
+---
+
 ## Summary
 
 Fixed three critical issues with Docker deployment:
