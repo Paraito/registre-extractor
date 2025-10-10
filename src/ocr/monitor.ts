@@ -466,19 +466,33 @@ export class OCRMonitor {
       const errorMsg = error instanceof Error ? error.message : 'Unknown error';
       OCRLogger.documentError(document.document_number, environment, errorMsg, document.id);
 
+      // Check if max attempts reached
+      const currentAttempts = document.ocr_attempts || 0;
+      const maxAttempts = document.ocr_max_attempts || 3;
+      const hasReachedMaxAttempts = currentAttempts >= maxAttempts;
+
       // Update document with error information
-      // Revert status to COMPLETE so it can be retried (if under max attempts)
+      // If max attempts reached, set status to ERREUR (4), otherwise revert to COMPLETE (3) for retry
       try {
         await client
           .from('extraction_queue')
           .update({
-            status_id: EXTRACTION_STATUS.COMPLETE, // Revert to ready for retry
+            status_id: hasReachedMaxAttempts ? EXTRACTION_STATUS.ERREUR : EXTRACTION_STATUS.COMPLETE,
             ocr_error: `OCR processing failed: ${errorMsg}`,
             ocr_last_error_at: new Date().toISOString(),
             // Do NOT set error_message - that's for registre extractor errors only
             updated_at: new Date().toISOString()
           })
           .eq('id', document.id);
+
+        if (hasReachedMaxAttempts) {
+          logger.warn({
+            documentId: document.id,
+            documentNumber: document.document_number,
+            attempts: currentAttempts,
+            maxAttempts
+          }, 'OCR max attempts reached - marking as ERREUR');
+        }
       } catch (updateError) {
         logger.error({
           updateError,
@@ -650,19 +664,33 @@ export class OCRMonitor {
       const errorMsg = error instanceof Error ? error.message : 'Unknown error';
       OCRLogger.documentError(document.document_number, environment, errorMsg, document.id);
 
+      // Check if max attempts reached
+      const currentAttempts = document.ocr_attempts || 0;
+      const maxAttempts = document.ocr_max_attempts || 3;
+      const hasReachedMaxAttempts = currentAttempts >= maxAttempts;
+
       // Update document with error information
-      // Revert status to COMPLETE so it can be retried (if under max attempts)
+      // If max attempts reached, set status to ERREUR (4), otherwise revert to COMPLETE (3) for retry
       try {
         await client
           .from('extraction_queue')
           .update({
-            status_id: EXTRACTION_STATUS.COMPLETE, // Revert to ready for retry
+            status_id: hasReachedMaxAttempts ? EXTRACTION_STATUS.ERREUR : EXTRACTION_STATUS.COMPLETE,
             ocr_error: `OCR processing failed: ${errorMsg}`,
             ocr_last_error_at: new Date().toISOString(),
             // Do NOT set error_message - that's for registre extractor errors only
             updated_at: new Date().toISOString()
           })
           .eq('id', document.id);
+
+        if (hasReachedMaxAttempts) {
+          logger.warn({
+            documentId: document.id,
+            documentNumber: document.document_number,
+            attempts: currentAttempts,
+            maxAttempts
+          }, 'OCR max attempts reached - marking as ERREUR');
+        }
       } catch (updateError) {
         logger.error({
           updateError,
