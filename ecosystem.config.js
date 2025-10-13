@@ -36,7 +36,8 @@ module.exports = {
         NODE_ENV: 'production',
         OCR_PROD: 'false',
         OCR_STAGING: 'false',
-        OCR_DEV: 'true'
+        OCR_DEV: 'true',
+        OCR_WORKER_COUNT: '5'
       }
     },
     {
