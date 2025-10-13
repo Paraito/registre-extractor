@@ -19,7 +19,10 @@ module.exports = {
       watch: false,
       max_memory_restart: '256M',
       env: {
-        NODE_ENV: 'production'
+        NODE_ENV: 'production',
+        OCR_PROD: 'false',
+        OCR_STAGING: 'false',
+        OCR_DEV: 'true'
       }
     },
     {
@@ -30,7 +33,10 @@ module.exports = {
       watch: false,
       max_memory_restart: '512M',
       env: {
-        NODE_ENV: 'production'
+        NODE_ENV: 'production',
+        OCR_PROD: 'false',
+        OCR_STAGING: 'false',
+        OCR_DEV: 'true'
       }
     },
     {
