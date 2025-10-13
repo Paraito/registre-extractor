@@ -209,7 +209,7 @@ export class UnifiedOCRProcessor {
    */
   private async extractWithGemini(
     pages: Array<{ base64Data: string; mimeType: string; pageNumber?: number }>
-  ): Promise<Array<{ pageNumber: number; rawText: string }>> {
+  ): Promise<Array<{ pageNumber: number; rawText: string; extractionComplete: boolean }>> {
     const extractionPromises = pages.map((page, index) =>
       this.geminiClient.extractText(
         page.base64Data,
@@ -218,6 +218,7 @@ export class UnifiedOCRProcessor {
       ).then(result => ({
         pageNumber: index + 1,
         rawText: result.text,
+        extractionComplete: true,
       }))
     );
 
@@ -229,7 +230,7 @@ export class UnifiedOCRProcessor {
    */
   private async extractWithClaude(
     pages: Array<{ base64Data: string; mimeType: string; pageNumber?: number }>
-  ): Promise<Array<{ pageNumber: number; rawText: string }>> {
+  ): Promise<Array<{ pageNumber: number; rawText: string; extractionComplete: boolean }>> {
     const results = await this.claudeClient.extractTextFromImages(
       pages.map((page, index) => ({
         base64Data: page.base64Data,
@@ -242,6 +243,7 @@ export class UnifiedOCRProcessor {
     return results.map(r => ({
       pageNumber: r.pageNumber,
       rawText: r.text,
+      extractionComplete: true,
     }));
   }
 }

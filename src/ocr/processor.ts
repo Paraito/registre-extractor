@@ -210,8 +210,6 @@ export class OCRProcessor {
         .map(p => `\n\n--- Page ${p.pageNumber} ---\n\n${p.rawText}`)
         .join('\n');
 
-      const allExtractionComplete = extractionResults.every(p => p.extractionComplete);
-
       OCRLogger.extractionComplete(conversionResult.totalPages, combinedRawText.length);
 
       // Step 4: Apply boost to the FULL concatenated raw text (SINGLE BOOST CALL)
@@ -221,7 +219,6 @@ export class OCRProcessor {
         {
           model: this.boostModel,
           temperature: this.boostTemperature,
-          maxAttempts: 3
         }
       );
 
@@ -233,8 +230,6 @@ export class OCRProcessor {
         pageNumber: extraction.pageNumber,
         rawText: extraction.rawText,
         boostedText: '', // Individual page boosted text not available in this flow
-        extractionComplete: extraction.extractionComplete,
-        boostComplete: boostResult.isComplete
       }));
 
       return {
@@ -242,7 +237,6 @@ export class OCRProcessor {
         totalPages: conversionResult.totalPages,
         combinedRawText,
         combinedBoostedText: boostResult.boostedText,
-        allPagesComplete: allExtractionComplete && boostResult.isComplete
       };
 
     } catch (error) {
@@ -291,13 +285,11 @@ export class OCRProcessor {
         {
           model: this.extractModel,
           temperature: this.extractTemperature,
-          maxAttempts: 3
         }
       );
 
       logger.info({
         textLength: extractionResult.text.length,
-        isComplete: extractionResult.isComplete
       }, 'Text extraction completed');
 
       // Step 3: Apply boost corrections
@@ -308,20 +300,16 @@ export class OCRProcessor {
         {
           model: this.boostModel,
           temperature: this.boostTemperature,
-          maxAttempts: 3
         }
       );
 
       logger.info({
         boostedTextLength: boostResult.boostedText.length,
-        isComplete: boostResult.isComplete
       }, 'Boost corrections applied');
 
       return {
         rawText: extractionResult.text,
         boostedText: boostResult.boostedText,
-        extractionComplete: extractionResult.isComplete,
-        boostComplete: boostResult.isComplete
       };
 
     } catch (error) {
