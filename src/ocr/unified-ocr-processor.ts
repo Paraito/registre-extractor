@@ -236,8 +236,7 @@ export class UnifiedOCRProcessor {
         mimeType: page.mimeType,
         pageNumber: index + 1,
       })),
-      EXTRACT_PROMPT,
-      }
+      EXTRACT_PROMPT
     );
 
     return results.map(r => ({
