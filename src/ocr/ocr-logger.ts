@@ -116,7 +116,7 @@ export class OCRLogger {
     docNumber: string,
     environment: string,
     totalPages: number,
-    rawChars: number,
+    fileContentChars: number,
     boostedChars: number,
     totalDuration: number
   ): void {
@@ -128,8 +128,8 @@ export class OCRLogger {
     console.log(`   Document Number: ${docNumber}`);
     console.log(`   Environment: ${environment}`);
     console.log(`   Total Pages: ${totalPages}`);
-    console.log(`   Raw Text: ${rawChars.toLocaleString()} chars`);
-    console.log(`   Boosted Text: ${boostedChars.toLocaleString()} chars`);
+    console.log(`   File Content: ${fileContentChars.toLocaleString()} chars`);
+    console.log(`   Boosted Content: ${boostedChars.toLocaleString()} chars`);
     console.log(`   Total Duration: ${totalDuration.toFixed(1)}s`);
     console.log(`   Status: ✅ Saved to database`);
     console.log('\n' + SEPARATOR + '\n');
@@ -176,10 +176,18 @@ export class OCRLogger {
   }
 
   /**
-   * Log retry attempt
+   * Log info message
    */
-  static retryAttempt(operation: string, attempt: number, maxAttempts: number): void {
-    console.log(`   ⚠️  ${operation} truncated, retrying (${attempt}/${maxAttempts})...`);
+  static info(message: string, details?: Record<string, any>): void {
+    console.log('\n' + SUBSEPARATOR);
+    console.log(`ℹ️  ${message}`);
+    if (details) {
+      console.log(SUBSEPARATOR);
+      Object.entries(details).forEach(([key, value]) => {
+        console.log(`   ${key}: ${value}`);
+      });
+    }
+    console.log(SUBSEPARATOR + '\n');
   }
 
   /**

@@ -2,10 +2,10 @@
  * Test OCR processing for a specific row
  */
 
-import { supabaseManager } from './src/utils/supabase';
-import { logger } from './src/utils/logger';
-import { OCRProcessor } from './src/ocr';
-import { config } from './src/config';
+import { supabaseManager } from '../src/utils/supabase';
+import { logger } from '../src/utils/logger';
+import { OCRProcessor } from '../src/ocr';
+import { config } from '../src/config';
 
 async function testSpecificRow() {
   const rowId = '814362fe-c106-44b5-ad8f-9113966f3e5d';

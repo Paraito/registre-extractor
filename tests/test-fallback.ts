@@ -1,9 +1,9 @@
 #!/usr/bin/env ts-node
 
-import { AIRegistreExtractor } from './src/worker/extractor-ai';
-import { WorkerAccount, ExtractionConfig } from './src/types';
-import { logger } from './src/utils/logger';
-import { config } from './src/config';
+import { AIRegistreExtractor } from '../src/worker/extractor-ai';
+import { WorkerAccount, ExtractionConfig } from '../src/types';
+import { logger } from '../src/utils/logger';
+import { config } from '../src/config';
 
 async function testFallback() {
   logger.info('Starting fallback test');

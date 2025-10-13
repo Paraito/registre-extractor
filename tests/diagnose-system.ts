@@ -1,8 +1,8 @@
-import { supabaseManager } from './src/utils/supabase';
-import { EXTRACTION_STATUS } from './src/types';
-import { logger } from './src/utils/logger';
+import { supabaseManager } from '../src/utils/supabase';
+import { EXTRACTION_STATUS } from '../src/types';
+import { logger } from '../src/utils/logger';
 import Redis from 'ioredis';
-import { config } from './src/config';
+import { config } from '../src/config';
 
 /**
  * Comprehensive system diagnostic script

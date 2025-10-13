@@ -11,12 +11,10 @@ export interface GeminiOCRConfig {
 
 export interface OCRExtractionResult {
   text: string;
-  isComplete: boolean;
 }
 
 export interface OCRBoostResult {
   boostedText: string;
-  isComplete: boolean;
 }
 
 export class GeminiOCRClient {
@@ -53,12 +51,10 @@ export class GeminiOCRClient {
     options?: {
       model?: string;
       temperature?: number;
-      maxAttempts?: number;
     }
   ): Promise<OCRExtractionResult> {
     const model = options?.model || this.defaultModel;
     const temperature = options?.temperature || this.defaultTemperature;
-    const maxAttempts = options?.maxAttempts || 3;
 
     let maxTokens = this.defaultMaxTokens;
     if (model.includes('2.5') && model.includes('pro')) {
@@ -77,54 +73,19 @@ export class GeminiOCRClient {
       }
     });
 
-    let attemptCount = 0;
-    let isComplete = false;
-    let accumulatedText = '';
-
-    while (!isComplete && attemptCount < maxAttempts) {
-      attemptCount++;
-
-      try {
-        const imagePart = {
-          inlineData: {
-            data: imageData,
-            mimeType: mimeType
-          }
-        };
-
-        let finalPrompt = prompt;
-        if (attemptCount > 1) {
-          finalPrompt = `${prompt}\n\n⚠️ CONTINUATION REQUEST: The previous response was truncated. Continue from where you left off and ensure you include the completion marker.`;
-        }
-
-        const result = await generativeModel.generateContent([finalPrompt, imagePart]);
-        const response = await result.response;
-        const text = response.text();
-
-        accumulatedText += text;
-
-        // Check for completion marker
-        if (text.includes('✅ EXTRACTION_COMPLETE:')) {
-          isComplete = true;
-        } else if (attemptCount < maxAttempts) {
-          OCRLogger.retryAttempt('Extraction', attemptCount, maxAttempts);
-        }
-
-      } catch (error) {
-        logger.error({
-          error: error instanceof Error ? error.message : error,
-          attempt: attemptCount
-        }, 'Error during text extraction');
-
-        if (attemptCount >= maxAttempts) {
-          throw error;
-        }
+    const imagePart = {
+      inlineData: {
+        data: imageData,
+        mimeType: mimeType
       }
-    }
+    };
+
+    const result = await generativeModel.generateContent([prompt, imagePart]);
+    const response = await result.response;
+    const text = response.text();
 
     return {
-      text: accumulatedText,
-      isComplete
+      text
     };
   }
 
@@ -137,12 +98,10 @@ export class GeminiOCRClient {
     options?: {
       model?: string;
       temperature?: number;
-      maxAttempts?: number;
     }
   ): Promise<OCRBoostResult> {
     const model = options?.model || 'gemini-2.5-pro';
     const temperature = options?.temperature || 0.2;
-    const maxAttempts = options?.maxAttempts || 3;
 
     let maxTokens = this.defaultMaxTokens;
     if (model.includes('2.5') && model.includes('pro')) {
@@ -161,50 +120,16 @@ export class GeminiOCRClient {
       }
     });
 
-    let attemptCount = 0;
-    let isComplete = false;
-    let accumulatedText = '';
+    const fullPrompt = `${prompt}\n\n---\n\nTEXTE BRUT À BOOSTER :\n\n${rawText}`;
 
-    while (!isComplete && attemptCount < maxAttempts) {
-      attemptCount++;
+    logger.debug({ model }, 'Boosting text...');
 
-      try {
-        let fullPrompt = `${prompt}\n\n---\n\nTEXTE BRUT À BOOSTER :\n\n${rawText}`;
-
-        if (attemptCount > 1) {
-          fullPrompt = `${prompt}\n\n⚠️ CONTINUATION REQUEST: The previous response was truncated. Continue from where you left off and ensure you include the completion marker.\n\n---\n\nTEXTE BRUT À BOOSTER :\n\n${rawText}`;
-        }
-
-        logger.debug({ attempt: attemptCount, model }, 'Boosting text...');
-
-        const result = await generativeModel.generateContent(fullPrompt);
-        const response = await result.response;
-        const text = response.text();
-
-        accumulatedText += text;
-
-        // Check for completion marker
-        if (text.includes('✅ BOOST_COMPLETE:')) {
-          isComplete = true;
-        } else if (attemptCount < maxAttempts) {
-          OCRLogger.retryAttempt('Boost', attemptCount, maxAttempts);
-        }
-
-      } catch (error) {
-        logger.error({
-          error: error instanceof Error ? error.message : error,
-          attempt: attemptCount
-        }, 'Error during text boost');
-
-        if (attemptCount >= maxAttempts) {
-          throw error;
-        }
-      }
-    }
+    const result = await generativeModel.generateContent(fullPrompt);
+    const response = await result.response;
+    const text = response.text();
 
     return {
-      boostedText: accumulatedText,
-      isComplete
+      boostedText: text
     };
   }
 }

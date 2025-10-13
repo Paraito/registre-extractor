@@ -14,10 +14,10 @@
  * with status_id=3 in the dev environment.
  */
 
-import { ActeOCRProcessor } from './src/ocr/acte-processor';
-import { supabaseManager, EnvironmentName } from './src/utils/supabase';
-import { config } from './src/config';
-import { EXTRACTION_STATUS } from './src/types';
+import { ActeOCRProcessor } from '../src/ocr/acte-processor';
+import { supabaseManager, EnvironmentName } from '../src/utils/supabase';
+import { config } from '../src/config';
+import { EXTRACTION_STATUS } from '../src/types';
 import fs from 'fs/promises';
 import path from 'path';
 

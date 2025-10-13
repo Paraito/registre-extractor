@@ -1,6 +1,6 @@
-import { supabaseManager } from './src/utils/supabase';
-import { EXTRACTION_STATUS } from './src/types';
-import { staleOCRMonitor } from './src/ocr/stale-ocr-monitor';
+import { supabaseManager } from '../src/utils/supabase';
+import { EXTRACTION_STATUS } from '../src/types';
+import { staleOCRMonitor } from '../src/ocr/stale-ocr-monitor';
 
 /**
  * Test script to verify OCR stuck job recovery system

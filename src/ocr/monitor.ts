@@ -3,22 +3,59 @@ import { logger } from '../utils/logger';
 import { EXTRACTION_STATUS, ExtractionQueueJob } from '../types';
 import { OCRProcessor } from './processor';
 import { ActeOCRProcessor } from './acte-processor';
+import { UnifiedOCRProcessor } from './unified-ocr-processor';
 import { OCRLogger } from './ocr-logger';
 import { staleOCRMonitor } from './stale-ocr-monitor';
-import { sanitizeOCRResult } from './sanitizer';
 import { config } from '../config';
 import fs from 'fs/promises';
 import path from 'path';
 
+/**
+ * Extract just the path portion from a Supabase storage URL
+ * Removes the full URL prefix and returns only the storage path
+ */
+function extractPathFromUrl(url: string): string {
+  if (!url) return url;
+
+  // If it's a full URL, extract the path after /storage/v1/object/
+  if (url.startsWith('http://') || url.startsWith('https://')) {
+    const match = url.match(/\/storage\/v1\/object\/(?:(?:public|sign)\/)?(.+)$/);
+    if (match) {
+      return match[1];
+    }
+  }
+
+  // Otherwise return as-is
+  return url;
+}
+
 export interface OCRMonitorConfig {
   geminiApiKey: string;
+  claudeApiKey?: string;
+  preferredProvider?: 'gemini' | 'claude';
   pollIntervalMs?: number;
   tempDir?: string;
   concurrency?: number;
   workerId?: string;
+  extractModel?: {
+    gemini?: string;
+    claude?: string;
+  };
+  boostModel?: {
+    gemini?: string;
+    claude?: string;
+  };
+  extractTemperature?: number;
+  boostTemperature?: number;
   acte?: {
-    extractModel?: string;
-    boostModel?: string;
+    extractModel?: {
+      gemini?: string;
+      claude?: string;
+    };
+    boostModel?: {
+      gemini?: string;
+      claude?: string;
+    };
     extractTemperature?: number;
     boostTemperature?: number;
   };
@@ -27,47 +64,91 @@ export interface OCRMonitorConfig {
 /**
  * OCR Monitor Service
  * Monitors extraction_queue for completed documents (index and acte) and triggers OCR processing
+ * Uses UnifiedOCRProcessor with automatic Gemini -> Claude fallback
  */
 export class OCRMonitor {
-  private indexProcessor: OCRProcessor;
-  private acteProcessor: ActeOCRProcessor;
+  private unifiedProcessor!: UnifiedOCRProcessor;
+  private indexProcessor!: OCRProcessor; // Legacy - kept for backward compatibility
+  private acteProcessor!: ActeOCRProcessor; // Legacy - kept for backward compatibility
   private pollIntervalMs: number;
   private isRunning: boolean = false;
   private pollTimeout: NodeJS.Timeout | null = null;
   private workerId: string;
+  private useUnifiedProcessor: boolean;
+  private tempDir: string;
 
   constructor(config: OCRMonitorConfig) {
     // Generate unique worker ID
     this.workerId = config.workerId || `ocr-worker-${process.pid}-${Date.now()}`;
+    this.tempDir = config.tempDir || '/tmp/ocr-processing';
 
     logger.debug({ workerId: this.workerId }, 'OCR Worker ID assigned');
-    // Initialize index processor (uses Vision API with PDF to image conversion)
-    this.indexProcessor = new OCRProcessor({
-      geminiApiKey: config.geminiApiKey,
-      tempDir: config.tempDir || '/tmp/ocr-processing'
-    });
 
-    // Initialize acte processor (uses File API for direct PDF processing)
-    this.acteProcessor = new ActeOCRProcessor({
-      geminiApiKey: config.geminiApiKey,
-      tempDir: config.tempDir ? `${config.tempDir}-acte` : '/tmp/ocr-acte-processing',
-      extractModel: config.acte?.extractModel,
-      boostModel: config.acte?.boostModel,
-      extractTemperature: config.acte?.extractTemperature,
-      boostTemperature: config.acte?.boostTemperature,
-    });
+    // Use unified processor if Claude API key is provided
+    this.useUnifiedProcessor = !!config.claudeApiKey;
+
+    if (this.useUnifiedProcessor) {
+      // Initialize unified processor with automatic fallback
+      this.unifiedProcessor = new UnifiedOCRProcessor({
+        geminiApiKey: config.geminiApiKey,
+        claudeApiKey: config.claudeApiKey!,
+        tempDir: this.tempDir,
+        preferredProvider: config.preferredProvider || 'gemini',
+        extractModel: config.extractModel,
+        boostModel: config.boostModel,
+        extractTemperature: config.extractTemperature,
+        boostTemperature: config.boostTemperature,
+      });
+
+      // IMPORTANT: Still initialize acteProcessor for acte document processing
+      // Acte documents use File API (not Vision API), so they need their own processor
+      this.acteProcessor = new ActeOCRProcessor({
+        geminiApiKey: config.geminiApiKey,
+        tempDir: `${this.tempDir}-acte`,
+        extractModel: config.acte?.extractModel?.gemini,
+        boostModel: config.acte?.boostModel?.gemini,
+        extractTemperature: config.acte?.extractTemperature,
+        boostTemperature: config.acte?.boostTemperature,
+      });
+
+      OCRLogger.info(`🔄 Using Unified OCR Processor with automatic fallback (preferred: ${config.preferredProvider || 'gemini'})`);
+    } else {
+      // Fallback to legacy processors (Gemini only)
+      this.indexProcessor = new OCRProcessor({
+        geminiApiKey: config.geminiApiKey,
+        tempDir: this.tempDir
+      });
+
+      this.acteProcessor = new ActeOCRProcessor({
+        geminiApiKey: config.geminiApiKey,
+        tempDir: `${this.tempDir}-acte`,
+        extractModel: config.acte?.extractModel?.gemini,
+        boostModel: config.acte?.boostModel?.gemini,
+        extractTemperature: config.acte?.extractTemperature,
+        boostTemperature: config.acte?.boostTemperature,
+      });
+
+      OCRLogger.warning('⚠️  Using legacy Gemini-only processors (no Claude fallback)');
+    }
 
     this.pollIntervalMs = config.pollIntervalMs || 10000; // Default: 10 seconds
 
     logger.debug({
-      pollIntervalMs: this.pollIntervalMs
-    }, 'OCR Monitor initialized (index + acte support)');
+      pollIntervalMs: this.pollIntervalMs,
+      useUnifiedProcessor: this.useUnifiedProcessor
+    }, 'OCR Monitor initialized');
   }
 
   async initialize(): Promise<void> {
-    await this.indexProcessor.initialize();
-    await this.acteProcessor.initialize();
-    logger.debug('OCR Monitor ready (index + acte processors initialized)');
+    if (this.useUnifiedProcessor) {
+      await this.unifiedProcessor.initialize();
+      await this.acteProcessor.initialize(); // Always initialize acte processor
+      logger.debug('Unified OCR Processor and Acte Processor initialized');
+    } else {
+      await this.indexProcessor.initialize();
+      await this.acteProcessor.initialize();
+      logger.debug('Legacy OCR processors initialized');
+    }
   }
 
   /**
@@ -109,8 +190,14 @@ export class OCRMonitor {
     // Stop the stale OCR job monitor
     staleOCRMonitor.stop();
 
-    await this.indexProcessor.cleanup();
-    await this.acteProcessor.cleanup();
+    // Cleanup processors
+    if (this.useUnifiedProcessor) {
+      await this.unifiedProcessor.cleanup();
+    } else {
+      await this.indexProcessor.cleanup();
+    }
+    await this.acteProcessor.cleanup(); // Always cleanup acte processor
+
     logger.info('OCR Monitor stopped');
   }
 
@@ -338,7 +425,7 @@ export class OCRMonitor {
         } else {
           logger.warn({
             documentId: document.id,
-            supabasePath: document.supabase_path
+            supabasePath: extractPathFromUrl(document.supabase_path)
           }, 'Could not parse URL format, using as-is');
         }
       } else if (storagePath.startsWith(`${bucketName}/`)) {
@@ -349,7 +436,7 @@ export class OCRMonitor {
       logger.debug({
         documentId: document.id,
         documentSource: document.document_source,
-        originalPath: document.supabase_path,
+        originalPath: extractPathFromUrl(document.supabase_path),
         parsedPath: storagePath,
         bucket: bucketName
       }, 'Index/Plan PDF path parsing');
@@ -364,10 +451,7 @@ export class OCRMonitor {
       }
 
       // Save to temporary file
-      const tempPath = path.join(
-        this.indexProcessor['pdfConverter']['tempDir'],
-        `download-${Date.now()}.pdf`
-      );
+      const tempPath = path.join(this.tempDir, `download-${Date.now()}.pdf`);
 
       const arrayBuffer = await pdfData.arrayBuffer();
       const buffer = Buffer.from(arrayBuffer);
@@ -378,11 +462,12 @@ export class OCRMonitor {
         fileSize: buffer.length
       }, 'PDF downloaded');
 
-      // Process the PDF using PARALLEL processing with CORRECT flow:
-      // Step 1: Extract raw text from all pages (parallel)
-      // Step 2: CONCATENATE all raw text
-      // Step 3: Apply boost to FULL concatenated raw text
-      const ocrResult = await this.indexProcessor.processPDFParallel(tempPath);
+      // Process the PDF with automatic fallback
+      // Unified processor: Tries Gemini first, falls back to Claude on failure
+      // Legacy processor: Gemini only
+      const ocrResult = this.useUnifiedProcessor
+        ? await this.unifiedProcessor.processPDFParallel(tempPath)
+        : await this.indexProcessor.processPDFParallel(tempPath);
 
       // Clean up temp file
       await fs.unlink(tempPath).catch(err => {
@@ -390,27 +475,22 @@ export class OCRMonitor {
       });
 
       // Store both raw and boosted text
-      // file_content: Clean JSON structure with inscriptions (sanitized from boosted text)
-      // boosted_file_content: Enhanced text with 60+ correction rules applied (verbose, for logging)
+      // file_content: Raw LLM output (boosted text with corrections applied)
+      // boosted_file_content: Same as file_content (for backward compatibility)
       const rawText = ocrResult.combinedRawText;
       const boostedText = ocrResult.combinedBoostedText;
 
-      // NEW: Sanitize boosted text to clean JSON
-      logger.info({ documentId: document.id }, 'Sanitizing OCR result to JSON');
-      const sanitizedJSON = sanitizeOCRResult(boostedText);
-      const cleanJSON = JSON.stringify(sanitizedJSON, null, 2);
-
       logger.info({
         documentId: document.id,
-        totalPages: sanitizedJSON.pages.length,
-        totalInscriptions: sanitizedJSON.pages.reduce((sum, p) => sum + p.inscriptions.length, 0)
-      }, 'OCR sanitization complete');
+        rawTextLength: rawText.length,
+        boostedTextLength: boostedText.length
+      }, 'OCR processing complete');
 
       // Try to update with both fields first
       let updateError = null;
       let updateData: any = {
-        file_content: cleanJSON,                    // CHANGED: Now clean JSON instead of raw text
-        boosted_file_content: boostedText,          // UNCHANGED: Verbose for logging
+        file_content: boostedText,                  // Store raw LLM output directly
+        boosted_file_content: boostedText,          // Same content for backward compatibility
         status_id: EXTRACTION_STATUS.EXTRACTION_COMPLETE, // Status 5
         ocr_completed_at: new Date().toISOString(),
         ocr_error: null, // Clear any previous OCR errors
@@ -426,12 +506,12 @@ export class OCRMonitor {
       if (firstError && firstError.code === 'PGRST204' && firstError.message?.includes('boosted_file_content')) {
         OCRLogger.warning('boosted_file_content column not found', {
           'Migration': '004 not applied',
-          'Action': 'Saving only clean JSON in file_content'
+          'Action': 'Saving only file_content'
         });
 
-        // Retry without boosted_file_content (still use clean JSON)
+        // Retry without boosted_file_content
         updateData = {
-          file_content: cleanJSON,  // CHANGED: Use clean JSON instead of raw text
+          file_content: boostedText,  // Store raw LLM output
           status_id: EXTRACTION_STATUS.EXTRACTION_COMPLETE, // Status 5
           ocr_completed_at: new Date().toISOString(),
           ocr_error: null, // Clear any previous OCR errors
@@ -457,8 +537,8 @@ export class OCRMonitor {
         document.document_number,
         environment,
         ocrResult.totalPages,
-        rawText.length,
-        boostedText.length,
+        boostedText.length,      // Raw LLM output length
+        boostedText.length,      // Same as file_content
         totalDuration
       );
 
@@ -550,7 +630,7 @@ export class OCRMonitor {
         } else {
           logger.warn({
             documentId: document.id,
-            supabasePath: document.supabase_path
+            supabasePath: extractPathFromUrl(document.supabase_path)
           }, 'Could not parse URL format, using as-is');
         }
       } else if (storagePath.startsWith(`${bucketName}/`)) {
@@ -560,7 +640,7 @@ export class OCRMonitor {
 
       logger.debug({
         documentId: document.id,
-        originalPath: document.supabase_path,
+        originalPath: extractPathFromUrl(document.supabase_path),
         parsedPath: storagePath,
         bucket: bucketName
       }, 'Acte PDF path parsing');
@@ -576,7 +656,7 @@ export class OCRMonitor {
 
       // Save to temporary file
       const tempPath = path.join(
-        this.acteProcessor['tempDir'],
+        `${this.tempDir}-acte`,
         `acte-download-${Date.now()}.pdf`
       );
 
@@ -708,6 +788,17 @@ if (require.main === module) {
     process.exit(1);
   }
 
+  // Log provider configuration
+  if (config.ocr.claudeApiKey) {
+    logger.info({
+      preferredProvider: config.ocr.preferredProvider,
+      hasGemini: !!config.ocr.geminiApiKey,
+      hasClaude: !!config.ocr.claudeApiKey
+    }, '🔄 Unified OCR with automatic fallback enabled');
+  } else {
+    logger.warn('⚠️  Claude API key not configured - using Gemini only (no fallback)');
+  }
+
   const workerCount = config.ocr.workerCount || 2;
   const workers: OCRMonitor[] = [];
 
@@ -719,9 +810,15 @@ if (require.main === module) {
 
     const monitor = new OCRMonitor({
       geminiApiKey: config.ocr.geminiApiKey,
+      claudeApiKey: config.ocr.claudeApiKey,
+      preferredProvider: config.ocr.preferredProvider,
       pollIntervalMs: config.ocr.pollIntervalMs,
       tempDir: `${config.ocr.tempDir}-${i + 1}`,
       workerId,
+      extractModel: config.ocr.extractModel,
+      boostModel: config.ocr.boostModel,
+      extractTemperature: config.ocr.extractTemperature,
+      boostTemperature: config.ocr.boostTemperature,
       acte: config.ocr.acte
     });
 

@@ -45,15 +45,14 @@ describe('Parallel OCR Processing', () => {
 
       // Mock text extraction (called 3 times - once per page)
       mockGeminiClient.extractText = jest.fn()
-        .mockResolvedValueOnce({ text: 'Raw text page 1', isComplete: true })
-        .mockResolvedValueOnce({ text: 'Raw text page 2', isComplete: true })
-        .mockResolvedValueOnce({ text: 'Raw text page 3', isComplete: true });
+        .mockResolvedValueOnce({ text: 'Raw text page 1' })
+        .mockResolvedValueOnce({ text: 'Raw text page 2' })
+        .mockResolvedValueOnce({ text: 'Raw text page 3' });
 
       // Mock boost (called ONCE with concatenated text - CORRECT FLOW!)
       mockGeminiClient.boostText = jest.fn()
         .mockResolvedValueOnce({
-          boostedText: 'Boosted full document with all pages',
-          isComplete: true
+          boostedText: 'Boosted full document with all pages'
         });
 
       // Mock cleanup
@@ -113,26 +112,21 @@ describe('Parallel OCR Processing', () => {
         ]
       });
 
-      // Mock extraction - page 2 incomplete
+      // Mock extraction
       mockGeminiClient.extractText = jest.fn()
-        .mockResolvedValueOnce({ text: 'Raw text page 1', isComplete: true })
-        .mockResolvedValueOnce({ text: 'Raw text page 2 (incomplete)', isComplete: false });
+        .mockResolvedValueOnce({ text: 'Raw text page 1' })
+        .mockResolvedValueOnce({ text: 'Raw text page 2' });
 
       // Mock boost (called ONCE with concatenated text)
       mockGeminiClient.boostText = jest.fn()
-        .mockResolvedValueOnce({ boostedText: 'Boosted full text', isComplete: true });
+        .mockResolvedValueOnce({ boostedText: 'Boosted full text' });
 
       mockPdfConverter.cleanupAll = jest.fn().mockResolvedValue(undefined);
 
       // Process PDF
       const result = await processor.processPDFParallel('/test/document.pdf');
 
-      // Verify allPagesComplete is false (because extraction was incomplete)
-      expect(result.allPagesComplete).toBe(false);
-      expect(result.pages[0].extractionComplete).toBe(true);
-      expect(result.pages[1].extractionComplete).toBe(false);
-
-      // But boost should still have been called once
+      // Verify boost was called once
       expect(mockGeminiClient.boostText).toHaveBeenCalledTimes(1);
     });
 
@@ -146,10 +140,10 @@ describe('Parallel OCR Processing', () => {
       });
 
       mockGeminiClient.extractText = jest.fn()
-        .mockResolvedValueOnce({ text: 'Raw text', isComplete: true });
+        .mockResolvedValueOnce({ text: 'Raw text' });
 
       mockGeminiClient.boostText = jest.fn()
-        .mockResolvedValueOnce({ boostedText: 'Boosted text', isComplete: true });
+        .mockResolvedValueOnce({ boostedText: 'Boosted text' });
 
       mockPdfConverter.cleanupAll = jest.fn().mockResolvedValue(undefined);
 
@@ -199,10 +193,10 @@ describe('Parallel OCR Processing', () => {
       });
 
       mockGeminiClient.extractText = jest.fn()
-        .mockResolvedValueOnce({ text: 'Raw text', isComplete: true });
+        .mockResolvedValueOnce({ text: 'Raw text' });
 
       mockGeminiClient.boostText = jest.fn()
-        .mockResolvedValueOnce({ boostedText: 'Boosted text', isComplete: true });
+        .mockResolvedValueOnce({ boostedText: 'Boosted text' });
 
       mockPdfConverter.cleanup = jest.fn().mockResolvedValue(undefined);
 
@@ -212,8 +206,6 @@ describe('Parallel OCR Processing', () => {
       // Verify old interface still works
       expect(result.rawText).toBe('Raw text');
       expect(result.boostedText).toBe('Boosted text');
-      expect(result.extractionComplete).toBe(true);
-      expect(result.boostComplete).toBe(true);
 
       // Verify it used the single-page conversion
       expect(mockPdfConverter.convertToImage).toHaveBeenCalled();

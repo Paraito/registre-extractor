@@ -18,16 +18,12 @@ export interface OCRProcessorConfig {
 export interface OCRResult {
   rawText: string;
   boostedText: string;
-  extractionComplete: boolean;
-  boostComplete: boolean;
 }
 
 export interface PageOCRResult {
   pageNumber: number;
   rawText: string;
   boostedText: string;
-  extractionComplete: boolean;
-  boostComplete: boolean;
 }
 
 export interface MultiPageOCRResult {
@@ -35,7 +31,6 @@ export interface MultiPageOCRResult {
   totalPages: number;
   combinedRawText: string;
   combinedBoostedText: string;
-  allPagesComplete: boolean;
 }
 
 /**
@@ -80,7 +75,7 @@ export class OCRProcessor {
     base64Data: string,
     mimeType: string,
     totalPages?: number
-  ): Promise<{ pageNumber: number; rawText: string; extractionComplete: boolean }> {
+  ): Promise<{ pageNumber: number; rawText: string }> {
     try {
       // Extract text from image
       const extractionResult = await this.geminiClient.extractText(
@@ -89,8 +84,7 @@ export class OCRProcessor {
         EXTRACT_PROMPT,
         {
           model: this.extractModel,
-          temperature: this.extractTemperature,
-          maxAttempts: 3
+          temperature: this.extractTemperature
         }
       );
 
@@ -101,8 +95,7 @@ export class OCRProcessor {
 
       return {
         pageNumber,
-        rawText: extractionResult.text,
-        extractionComplete: extractionResult.isComplete
+        rawText: extractionResult.text
       };
 
     } catch (error) {

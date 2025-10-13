@@ -1,6 +1,6 @@
-import { supabaseManager } from './src/utils/supabase';
-import { EXTRACTION_STATUS } from './src/types';
-import { logger } from './src/utils/logger';
+import { supabaseManager } from '../src/utils/supabase';
+import { EXTRACTION_STATUS } from '../src/types';
+import { logger } from '../src/utils/logger';
 
 /**
  * Script to reset OCR jobs stuck in "OCR en traitement" status (status_id = 6)

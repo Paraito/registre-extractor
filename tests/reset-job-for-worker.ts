@@ -1,5 +1,5 @@
-import { supabase } from './src/utils/supabase';
-import { EXTRACTION_STATUS } from './src/types';
+import { supabase } from '../src/utils/supabase';
+import { EXTRACTION_STATUS } from '../src/types';
 
 async function resetJobForWorker() {
   const jobId = '5ccddc25-fe14-4282-aa80-29975cdeb5a5';

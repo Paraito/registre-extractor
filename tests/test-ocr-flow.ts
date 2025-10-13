@@ -3,8 +3,8 @@
  * Tests the CORRECT flow: Extract all → Concatenate → Boost once
  */
 
-import { OCRProcessor } from './src/ocr/processor';
-import { logger } from './src/utils/logger';
+import { OCRProcessor } from '../src/ocr/processor';
+import { logger } from '../src/utils/logger';
 
 // Mock Gemini client to track calls
 class MockGeminiClient {

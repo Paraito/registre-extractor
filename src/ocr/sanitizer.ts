@@ -27,19 +27,28 @@ export function sanitizeOCRResult(combinedBoostedText: string): SanitizedOCRResu
     // Step 2: Process each page
     const pages: PageResult[] = pageTexts.map((pageText, index) => {
       const pageNumber = index + 1;
-      
+
       try {
         // Extract metadata
         const metadata = extractPageMetadata(pageText);
-        
+
         // Extract inscriptions
         const inscriptions = extractInscriptions(pageText);
-        
+
         logger.debug({
           pageNumber,
           inscriptionCount: inscriptions.length,
           hasMetadata: !!(metadata.circonscription || metadata.cadastre || metadata.lot_number)
         }, 'Processed page');
+
+        // CRITICAL: Log warning if no inscriptions found but page has content
+        if (inscriptions.length === 0 && pageText.length > 100) {
+          logger.warn({
+            pageNumber,
+            pageTextLength: pageText.length,
+            pageTextPreview: pageText.substring(0, 500)
+          }, 'No inscriptions found in page with content');
+        }
 
         return {
           pageNumber,
@@ -49,9 +58,10 @@ export function sanitizeOCRResult(combinedBoostedText: string): SanitizedOCRResu
       } catch (error) {
         logger.error({
           pageNumber,
-          error: error instanceof Error ? error.message : error
+          error: error instanceof Error ? error.message : error,
+          pageTextPreview: pageText.substring(0, 500)
         }, 'Failed to process page');
-        
+
         // Return minimal valid structure for this page
         return {
           pageNumber,
@@ -144,19 +154,25 @@ function extractPageMetadata(pageText: string): PageMetadata {
  */
 function extractInscriptions(pageText: string): Inscription[] {
   const inscriptions: Inscription[] = [];
-  
+
   // Split by "Ligne X:" to get individual inscription blocks
   const lignePattern = /Ligne\s+(\d+)\s*:/gi;
-  const matches = [...pageText.matchAll(lignePattern)];
-  
+  const matches: RegExpExecArray[] = [];
+  let match: RegExpExecArray | null;
+
+  // Collect all matches
+  while ((match = lignePattern.exec(pageText)) !== null) {
+    matches.push(match);
+  }
+
   if (matches.length === 0) {
     logger.debug('No inscription lines found on page');
     return inscriptions;
   }
 
   for (let i = 0; i < matches.length; i++) {
-    const match = matches[i];
-    const startIndex = match.index! + match[0].length;
+    const currentMatch = matches[i];
+    const startIndex = currentMatch.index! + currentMatch[0].length;
     const endIndex = i < matches.length - 1 ? matches[i + 1].index! : pageText.length;
     const inscriptionText = pageText.substring(startIndex, endIndex);
 
@@ -165,7 +181,7 @@ function extractInscriptions(pageText: string): Inscription[] {
       inscriptions.push(inscription);
     } catch (error) {
       logger.warn({
-        ligneNumber: match[1],
+        ligneNumber: currentMatch[1],
         error: error instanceof Error ? error.message : error
       }, 'Failed to parse inscription');
     }
@@ -282,20 +298,20 @@ function splitNames(text: string): string[] {
   // Pattern: Look for sequences like "LASTNAME, Firstname" followed by another "LASTNAME"
   // This is a heuristic and may need refinement based on real data
   const names: string[] = [];
-  
+
   // Try to split by pattern of uppercase sequences followed by comma
   const pattern = /([A-ZÀÂÄÇÉÈÊËÏÎÔÙÛÜ][A-ZÀÂÄÇÉÈÊËÏÎÔÙÛÜ\s-]+,\s*[^,]+?)(?=\s+[A-ZÀÂÄÇÉÈÊËÏÎÔÙÛÜ]{2,}|$)/g;
-  const matches = text.matchAll(pattern);
-  
-  for (const match of matches) {
+  let match: RegExpExecArray | null;
+
+  while ((match = pattern.exec(text)) !== null) {
     names.push(match[1].trim());
   }
-  
+
   // Fallback: If pattern didn't work, return as single name
   if (names.length === 0) {
     return [text];
   }
-  
+
   return names;
 }
 

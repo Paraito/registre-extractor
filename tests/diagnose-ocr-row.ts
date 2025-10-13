@@ -1,6 +1,6 @@
-import { supabaseManager } from './src/utils/supabase';
-import { logger } from './src/utils/logger';
-import { EXTRACTION_STATUS } from './src/types';
+import { supabaseManager } from '../src/utils/supabase';
+import { logger } from '../src/utils/logger';
+import { EXTRACTION_STATUS } from '../src/types';
 import fs from 'fs/promises';
 import path from 'path';
 

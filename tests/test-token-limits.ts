@@ -5,7 +5,7 @@
  * for different Gemini model variants.
  */
 
-import { GeminiOCRClient } from './src/ocr/gemini-client';
+import { GeminiOCRClient } from '../src/ocr/gemini-client';
 
 function testTokenLimits() {
   console.log('\n🧪 Testing Gemini Token Limit Configuration\n');

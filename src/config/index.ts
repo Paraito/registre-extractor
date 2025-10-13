@@ -41,25 +41,34 @@ const envSchema = z.object({
 
   // OCR Configuration
   GEMINI_API_KEY: z.string().optional(),
-  OCR_EXTRACT_MODEL: z.string().default('gemini-2.0-flash-exp'),
-  OCR_BOOST_MODEL: z.string().default('gemini-2.5-pro'),
-  OCR_EXTRACT_TEMPERATURE: z.string().transform(Number).default('0.1'),
-  OCR_BOOST_TEMPERATURE: z.string().transform(Number).default('0.2'),
+  CLAUDE_API_KEY: z.string().optional(),
+  OCR_PREFERRED_PROVIDER: z.enum(['gemini', 'claude']).default('gemini'),
+  OCR_EXTRACT_MODEL_GEMINI: z.string().default('gemini-2.0-flash-exp'),
+  OCR_EXTRACT_MODEL_CLAUDE: z.string().default('claude-sonnet-4-5-20250929'),
+  OCR_BOOST_MODEL_GEMINI: z.string().default('gemini-2.5-pro'),
+  OCR_BOOST_MODEL_CLAUDE: z.string().default('claude-sonnet-4-5-20250929'),
+  OCR_EXTRACT_TEMPERATURE: z.string().transform(Number).default('0.0'),
+  OCR_BOOST_TEMPERATURE: z.string().transform(Number).default('0.0'),
   OCR_POLL_INTERVAL_MS: z.string().transform(Number).default('10000'),
   OCR_TEMP_DIR: z.string().default('/tmp/ocr-processing'),
   OCR_WORKER_COUNT: z.string().transform(Number).default('2'),
   OCR_WORKER_ID: z.string().optional(),
 
-  // Acte OCR Configuration (uses File API)
-  ACTE_OCR_EXTRACT_MODEL: z.string().default('gemini-2.0-flash-exp'),
-  ACTE_OCR_BOOST_MODEL: z.string().default('gemini-2.5-pro'),
-  ACTE_OCR_EXTRACT_TEMPERATURE: z.string().transform(Number).default('0.1'),
-  ACTE_OCR_BOOST_TEMPERATURE: z.string().transform(Number).default('0.2'),
+  // Acte OCR Configuration (uses File API for Gemini, images for Claude)
+  ACTE_OCR_EXTRACT_MODEL_GEMINI: z.string().default('gemini-2.0-flash-exp'),
+  ACTE_OCR_EXTRACT_MODEL_CLAUDE: z.string().default('claude-sonnet-4-5-20250929'),
+  ACTE_OCR_BOOST_MODEL_GEMINI: z.string().default('gemini-2.5-pro'),
+  ACTE_OCR_BOOST_MODEL_CLAUDE: z.string().default('claude-sonnet-4-5-20250929'),
+  ACTE_OCR_EXTRACT_TEMPERATURE: z.string().transform(Number).default('0.0'),
+  ACTE_OCR_BOOST_TEMPERATURE: z.string().transform(Number).default('0.0'),
 
   // OCR Environment Control
   OCR_PROD: z.string().transform(val => val !== 'false').default('true'),
   OCR_STAGING: z.string().transform(val => val !== 'false').default('true'),
   OCR_DEV: z.string().transform(val => val !== 'false').default('true'),
+
+  // OCR Output Format Control
+  OCR_SKIP_SANITIZATION: z.string().transform(val => val === 'true').default('false'),
 });
 
 const env = envSchema.parse(process.env);
@@ -150,8 +159,16 @@ export const config = {
   },
   ocr: {
     geminiApiKey: env.GEMINI_API_KEY,
-    extractModel: env.OCR_EXTRACT_MODEL,
-    boostModel: env.OCR_BOOST_MODEL,
+    claudeApiKey: env.CLAUDE_API_KEY,
+    preferredProvider: env.OCR_PREFERRED_PROVIDER,
+    extractModel: {
+      gemini: env.OCR_EXTRACT_MODEL_GEMINI,
+      claude: env.OCR_EXTRACT_MODEL_CLAUDE,
+    },
+    boostModel: {
+      gemini: env.OCR_BOOST_MODEL_GEMINI,
+      claude: env.OCR_BOOST_MODEL_CLAUDE,
+    },
     extractTemperature: env.OCR_EXTRACT_TEMPERATURE,
     boostTemperature: env.OCR_BOOST_TEMPERATURE,
     pollIntervalMs: env.OCR_POLL_INTERVAL_MS,
@@ -164,8 +181,14 @@ export const config = {
       dev: env.OCR_DEV,
     },
     acte: {
-      extractModel: env.ACTE_OCR_EXTRACT_MODEL,
-      boostModel: env.ACTE_OCR_BOOST_MODEL,
+      extractModel: {
+        gemini: env.ACTE_OCR_EXTRACT_MODEL_GEMINI,
+        claude: env.ACTE_OCR_EXTRACT_MODEL_CLAUDE,
+      },
+      boostModel: {
+        gemini: env.ACTE_OCR_BOOST_MODEL_GEMINI,
+        claude: env.ACTE_OCR_BOOST_MODEL_CLAUDE,
+      },
       extractTemperature: env.ACTE_OCR_EXTRACT_TEMPERATURE,
       boostTemperature: env.ACTE_OCR_BOOST_TEMPERATURE,
     },

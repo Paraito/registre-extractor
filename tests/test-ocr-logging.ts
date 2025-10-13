@@ -6,8 +6,8 @@
  * 2. PDF Converter initialization
  */
 
-import { OCRLogger } from './src/ocr/ocr-logger';
-import { PDFConverter } from './src/ocr/pdf-converter';
+import { OCRLogger } from '../src/ocr/ocr-logger';
+import { PDFConverter } from '../src/ocr/pdf-converter';
 
 async function testLogging() {
   console.log('\n🧪 Testing OCR Structured Logging\n');

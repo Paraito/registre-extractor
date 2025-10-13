@@ -1,4 +1,4 @@
-import { logger } from './src/utils/logger';
+import { logger } from '../src/utils/logger';
 
 async function createAndRunPlanTest() {
   console.log('🧪 Creating test job for plan_cadastraux extraction...');

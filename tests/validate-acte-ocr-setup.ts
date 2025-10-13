@@ -8,10 +8,10 @@
  *   npx ts-node validate-acte-ocr-setup.ts
  */
 
-import { config } from './src/config';
-import { supabaseManager, EnvironmentName } from './src/utils/supabase';
-import { GeminiFileClient } from './src/ocr/gemini-file-client';
-import { EXTRACTION_STATUS } from './src/types';
+import { config } from '../src/config';
+import { supabaseManager, EnvironmentName } from '../src/utils/supabase';
+import { GeminiFileClient } from '../src/ocr/gemini-file-client';
+import { EXTRACTION_STATUS } from '../src/types';
 import fs from 'fs/promises';
 
 const colors = {

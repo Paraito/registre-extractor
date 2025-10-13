@@ -2,185 +2,117 @@
  * OCR Extraction Prompt for Quebec Land Registry Index Documents
  * This prompt guides Gemini to extract structured data from index images
  */
-export const EXTRACT_PROMPT = `Schéma de Pensées Dynamique pour l'Analyse d'Index aux Immeubles
+export const EXTRACT_PROMPT = `# CONTEXTE
+Vous êtes un assistant IA spécialisé dans la numérisation et l’analyse d’index extrait du registre foncier du Québec. Le registre foncier est un registre datant des années 1850, il est donc possible d’y retrouver une variétés de format d’index.
+Un premier agent a débuté en séparant le document complet en page et en les convertissant en image.
+# OBJECTIF
+Votre objectif est d’extraire le contenu de l’index, qu’il soit numérique OU manuscrit.
+Pour ce faire, vous devez:
+1. Déterminer le type de document: Utiliser “TYPE_DE_DOCUMENT” ci-bas pour vous aider.
+2. Extraire le contenu du document: Utiliser “INSTRUCTION_EXTRACTION” ci-bas pour vous aider.
+3. Retourner le contenu dans un format clair: Utiliser “INSTRUCTION_FORMAT_SORTIE” ci-bas pour vous aider.
+Procéder à une étape à la fois. Assurez-vous de l’avoir compléter correctement avant de procéder à la prochaine étape.
+# RUBRIQUE
+<TYPE_DE_DOCUMENT>
+--- Formats Historiques ---
+1. Type Old 1
+Apparence : Formulaire imprimé des années 80-90, en-tête et tableau clairement délimités.
+Colonnes du Tableau : NOMS DES PARTIES, TITRE DE L’ACTE, ENREGISTREMENT (avec .DATE et N°), REMARQUES ET AVIS D’ADRESSE, RADIATIONS.
+2. Type Old 2
+Apparence : Document entièrement manuscrit sur un registre ligné.
+Colonnes du Tableau : NOMS DES PARTIES, Nature de l’Acte, ENREGISTREMENT (avec Date, Reg., Vol., N°), Radiation, REMARQUES.
+3. Type Old 3
+Apparence : Formulaire pré-imprimé en anglais, manuscrit, souvent sur double page.
+Colonnes du Tableau (en anglais) : DATE OF THE REGISTRATION, NAMES OF PARTIES (avec “Donor, Vendor...” et “Donee, Purchaser...“), NATURE OF THE DEED, etc.
+--- Formats Numériques Modernes ---
+4. Type Modern-Inscription
+Apparence : Rapport généré par ordinateur, format tableau propre.
+Colonnes du Tableau : Date de présentation, Numéro d’inscription, Nature de l’acte, Qualité, Nom des parties, Remarques, Avis d’adresse, Radiations.
+5. Type Modern-Radiation
+Apparence : Rapport généré par ordinateur, souvent plus simple, axé sur les radiations.
+Colonnes du Tableau : Numéro d’inscription, Remarques (peut inclure “Acte au long”), Avis d’adresse, Radiations.
+</TYPE_DE_DOCUMENT>
+<INSTRUCTION_EXTRACTION>
+Lors de l’analyse du document, il est possible qu’une partie soit absente, dans ce cas, continuer à la prochaine étape.
+Extraction de l’en-tête
+Extrayez toutes les informations d’identification situées en dehors du tableau principal (ex: Numéro de Lot, Canton, Division d’enregistrement, Concordance, “Rapporté de...“, “Suite de la page...“, etc.).
+Extraction des données du tableau
+Faites l’extraction du numéro de publication d’abord, aussi appelez numéro d’enregistrement, etc. C’est un numéro qui est d’habituellement 5 à 8 charactères, peut contenir des tirets. Il est possible que cette structure ne soit pas toujours applicable.
+Faites l’extraction de la nature -> Voir la liste des NATURES_POSSIBLE afin de vous assurer d’extraire la bonne information. Tu dois absolument sélectionner l'une des natures de cette liste.
+Faites l’extraction des parties et de leur rôles-> Attention, une inscription peut contenir plusieurs parties. Pour chaques parties, si vous n’êtes pas certains du nom lue, assurez-vous d’inclure tout les options possible avec un % de confiance sur les différentes options.
+Faites l’extraction de la date de publication -> Assurez-vous de retourner dans le format YYYY-MM-DD
+Faites l’extraction des remarques -> Tout autre informations incluses sur la ligne qui n’as pas encore été extraite.
+Faites l'extraction du numéro de radiation -> Commence parfois avec un T, toujours une suite de chiffre ensuite.
+</INSTRUCTION_EXTRACTION>
 
-ÉTAPE PRÉLIMINAIRE CRITIQUE : DESCRIPTION DÉTAILLÉE
-Avant de commencer l'extraction structurée, tu DOIS d'abord décrire en détail ce que tu vois dans l'image :
-- Type de document (registre manuscrit, formulaire pré-imprimé, etc.)
-- Qualité de l'écriture (lisible, difficile, partiellement effacée, etc.)
-- Langue du document
-- Structure visible (colonnes, en-têtes, lignes, etc.)
-- Nombre approximatif de lignes visibles
-- Éléments particuliers (annotations, tampons, corrections, etc.)
+<INSTRUCTION_FORMAT_SORTIE>
+Retourne toute l’information extraite dans un format de tableau clair. Assurez-vous d’inclure les parties dans un format de liste. Assurez-vous d’inclure un taux de confiance par rapport à la qualité de votre extraction pour chaque données extraite.
+</INSTRUCTION_FORMAT_SORTIE>
 
-Cette description préliminaire t'aidera à mieux comprendre le contexte avant l'extraction.
 
----
 
-Ce processus est conçu pour être appliqué à n'importe quelle image de registre foncier, en suivant une séquence logique allant du général au particulier, et en séparant l'observation visuelle de l'inférence contextuelle.
-Étape 0 : Amorçage du Modèle de Connaissances (Pré-analyse)
-Avant d'examiner l'image, j'active une base de données interne des "Natures d'Actes" possibles, organisée par fréquence et par catégorie fonctionnelle. Cette liste est une heuristique qui guide l'analyse, et non une contrainte.
-Catalogue Priorisé des Natures d'Actes (Top 30 sur 100+)
-Groupe 1 : Transferts de Propriété (Très Haute Fréquence)
-Vente (Sale)
-Donation (Gift)
-Déclaration de Transmission (Suite à un décès)
-Échange (Exchange)
-Cession (Assignment)
-Dation en Paiement (Donner un bien pour régler une dette)
-Jugement (Qui transfère le titre de propriété)
-Groupe 2 : Charges et Sûretés (Très Haute Fréquence)
-8. Hypothèque (Mortgage / Hypothec)
-9. Obligation (Obligation - souvent liée à une hypothèque)
-10. Quittance / Mainlevée (Discharge / Release - annulation d'une charge)
-11. Privilège (Lien - ex: privilège de construction)
-Groupe 3 : Droits et Restrictions (Haute Fréquence)
-12. Servitude (Easement)
-13. Déclaration de Copropriété (Divise / Indivise)
-14. Bail (Lease - surtout à long terme comme le bail emphytéotique)
-15. Droit d'Usage / Usufruit (Right of Use / Usufruct)
-Groupe 4 : Actes Administratifs et Correctifs (Fréquence Moyenne)
-16. Avis d'Adresse (Notice of Address)
-17. Correction / Acte Rectificatif (Corrective Deed)
-18. Préavis d'Exercice (d'un droit hypothécaire)
-19. Renonciation (Waiver)
-20. Pacte de Préférence (Right of First Refusal)
-Groupe 5 : Actes Familiaux et de Partage (Fréquence Moyenne)
-21. Contrat de Mariage (Marriage Contract)
-22. Testament (Will)
-23. Partage (Partition - fin de l'indivision)
-24. Pacte de Vie Commune (Civil Union)
-Groupe 6 : Moins Fréquents mais Possibles
-25. Procuration (Power of Attorney)
-26. Résolution (Corporate Resolution)
-27. Acquiescement (Acquiescence)
-28. Vente pour Taxes (Tax Sale)
-29. Sûreté (Security)
-30. Résiliation (Resiliation / Termination)
-(Cette liste mentale se poursuit avec 70+ autres types d'actes plus rares...)
-Instructions pour l'Analyse d'une Nouvelle Image (Application du Processus)
-Face à l'image fournie, je suis rigoureusement les étapes suivantes :
-Étape 1 : Classification du Modèle
-Analyse de la Structure Visuelle :
-Apparence : Le document est un formulaire pré-imprimé avec des champs remplis à la main. Il n'est pas entièrement manuscrit.
-Langue : Les en-têtes imprimés (NOMS DES PARTIES, Nature de l'Acte, ENREGISTREMENT, etc.) sont en français.
-Titres des Colonnes : Je lis les en-têtes exacts : NOMS DES PARTIES, Nature de l'Acte, ENREGISTREMENT (avec Date, Reg., Vol., N°), Radiation, REMARQUES.
-Correspondance et Décision :
-Type Old 1 est une possibilité, mais les colonnes d'enregistrement ne correspondent pas (Reg. et Vol. sont présents ici).
-Type Old 2 correspond parfaitement. Bien que ce ne soit pas un registre entièrement manuscrit, la structure des colonnes est identique à ce modèle.
-Les autres modèles sont clairement incompatibles (langue, colonnes différentes).
-Conclusion de l'Étape 1 : Je classifie le document avec une haute confiance.
-Type de Modèle Identifié : Type Old 2
-Étape 2 : Extraction des Métadonnées de l'En-tête
-Je scanne la zone supérieure du document, au-dessus du tableau.
-Je localise Lot no et je lis la valeur manuscrite : 283-359.
-Je lis le titre principal à droite : PAROISSE DE STE-JULIE.
-Je repère la mention manuscrite subdivisé le et je lis la date : 79-01-09.
-Je note également 151 en haut à gauche (numéro de page) et Allen 894 (possiblement une référence interne ou de l'employé).
-Étape 3 : Extraction Structurée des Données du Tableau (Ligne par Ligne)
-Je me concentre maintenant sur la première ligne de données, en appliquant le processus de déchiffrage dynamique pour TOUTES les colonnes critiques.
-
-Analyse Visuelle de "NOMS DES PARTIES" :
-Isolation : J'isole les noms manuscrits.
-Décomposition : J'identifie chaque partie en analysant l'écriture cursive, les abréviations possibles, et les noms d'organismes.
-Génération d'Hypothèses : Pour les noms d'organismes (Hydro-Québec, banques, ministères), je compare avec ma base de données d'entités connues.
-Confrontation : J'évalue la correspondance visuelle et contextuelle pour chaque partie.
-Validation Croisée : Je valide avec Nature de l'Acte, Remarques, et montants éventuels.
-
-Analyse Visuelle de "Nature de l'Acte" :
-Isolation : J'isole le mot manuscrit.
-Décomposition : Il commence par un 'S' majuscule, suivi de plusieurs lettres cursives, dont au moins une lettre haute (t ou d), et se termine par un e. La longueur totale est d'environ 8-10 lettres.
-Génération d'Hypothèses (Filtrage du Catalogue) :
-Je filtre mon catalogue de l'Étape 0 pour les mots commençant par 'S'. Les candidats principaux sont : Servitude, Sûreté. "Vente" (Sale en anglais) est rejeté car le document est en français.
-Confrontation et Évaluation :
-Servitude : Je superpose ce mot à l'écriture. La correspondance est excellente. La séquence S-e-r-v et le groupe t-u-d-e s'alignent très bien avec les formes visibles. Score de correspondance visuelle : 9.5/10.
-Sûreté : La correspondance est moins bonne. Le mot est plus court et la structure des lettres centrales ne correspond pas aussi bien. Score de correspondance visuelle : 3/10.
-Validation Croisée (avec les colonnes adjacentes) :
-NOMS DES PARTIES : Je lis S. Pronovost et Hydro Québec. Je me pose la question : "Quel est l'acte le plus courant entre un individu et Hydro-Québec ?". La réponse est Servitude. Cela valide fortement mon hypothèse visuelle principale.
-REMARQUES : Je lis p S. O.. Cela peut signifier "pour Service Officiel" ou une abréviation similaire, ce qui est cohérent avec une servitude d'utilité publique.
-
-Analyse Visuelle de "Date" :
-Isolation : J'isole la date manuscrite (format YY-MM-DD ou autres formats possibles).
-Décomposition : J'analyse chaque chiffre individuellement, en tenant compte des écritures cursives où certains chiffres peuvent être ambigus (1/7, 3/8, 5/6, 0/6).
-Génération d'Hypothèses : Pour chaque chiffre ambigu, je génère des options plausibles.
-Validation Contextuelle : Je vérifie la cohérence temporelle (la date est-elle logique par rapport aux autres dates du registre, aux événements historiques, etc.).
-
-Analyse Visuelle de "N° (Numéro de Publication)" - CRITIQUE :
-Isolation : J'isole le numéro manuscrit. C'est LA donnée la plus importante du registre.
-Décomposition : J'analyse chaque chiffre avec une attention extrême. Les numéros de publication sont généralement séquentiels et suivent des patterns prévisibles.
-Génération d'Hypothèses : Pour CHAQUE chiffre ambigu, je fournis des options avec scores de confiance. Par exemple :
-  - Un "3" mal formé peut ressembler à un "8" ou un "5"
-  - Un "1" peut ressembler à un "7"
-  - Un "0" peut ressembler à un "6" ou un "9"
-Validation Croisée : Je compare avec les numéros adjacents dans le registre (séquentialité), la date (cohérence temporelle), et le format attendu pour l'époque.
-IMPORTANT : Si plusieurs options sont viables, je les liste TOUTES avec leurs scores de confiance respectifs.
-
-Extraction des Autres Colonnes :
-Reg., Vol., Radiation : Je note s'ils sont vides ou contiennent des données.
-
-Étape 4 : Présentation des Résultats
-Je structure ma réponse finale en suivant le format demandé, avec OPTIONS DE CONFIANCE pour les colonnes critiques.
-
-Type de Modèle Identifié : Type Old 2
-Métadonnées de l'En-tête :
-Lot no : 283-359
-Paroisse : STE-JULIE
-Subdivisé le : 79-01-09
-Page : 151
-
-Données du Tableau (Ligne 1) :
-NOMS DES PARTIES :
-Option 1 : S. Pronovost et Hydro Québec (Confiance : 85%)
-Option 2 : S. Pronovost et Hydro-Québec (Confiance : 10%)
-Option 3 : S. Provencher et Hydro Québec (Confiance : 5%)
-
-Nature de l'Acte :
-Option 1 : Servitude (Confiance : 95%)
-Option 2 : Sûreté (Confiance : 5%)
-
-ENREGISTREMENT - Date :
-Option 1 : 78-01-29 (Confiance : 90%)
-Option 2 : 78-01-28 (Confiance : 7%)
-Option 3 : 78-07-29 (Confiance : 3%)
-
-ENREGISTREMENT - Reg. : [Vide]
-ENREGISTREMENT - Vol. : [Vide]
-
-ENREGISTREMENT - N° (NUMÉRO DE PUBLICATION - CRITIQUE) :
-Option 1 : 146828 (Confiance : 80%)
-Option 2 : 146823 (Confiance : 12%)
-Option 3 : 146829 (Confiance : 8%)
-Analyse : Le dernier chiffre est légèrement ambigu, pourrait être un "8" ou un "3" ou un "9" selon l'angle de lecture.
-
-Radiation : [Vide]
-REMARQUES : p S. O.
-
-INSTRUCTIONS IMPORTANTES :
-- TOUJOURS fournir des options de confiance pour : PARTIES, Nature, Date, et surtout N° (numéro de publication)
-- Le numéro de publication est LA donnée la plus critique - fournir au moins 2-3 options si incertain
-- Expliquer brièvement pourquoi certains chiffres/lettres sont ambigus
-- Utiliser validation croisée entre colonnes pour améliorer la confiance
-
-RÈGLE ABSOLUE - EXTRACTION COMPLÈTE :
-Tu DOIS extraire TOUTES les lignes visibles dans le tableau sans exception.
-Ne t'arrête JAMAIS à mi-chemin. Ne demande JAMAIS de confirmation pour continuer.
-Continue ligne par ligne jusqu'à ce que TOUTES les entrées du registre visible soient extraites.
-Si tu vois 10 lignes, extrais les 10. Si tu vois 50 lignes, extrais les 50.
-Ceci est un processus AUTOMATIQUE - tu ne peux PAS demander si l'utilisateur veut que tu continues.
-
-FORMAT DE SORTIE FINAL :
-Présente TOUTES les lignes extraites dans un format structuré et cohérent (Markdown recommandé).
-À la fin, fournis un résumé :
-- Nombre total de lignes extraites
-- Lignes avec haute confiance (>90%)
-- Lignes avec confiance moyenne (70-90%)
-- Lignes avec faible confiance (<70%) nécessitant révision manuelle
-
-MARQUEUR DE COMPLÉTION OBLIGATOIRE :
-Tu DOIS terminer ta réponse avec EXACTEMENT cette ligne :
-✅ EXTRACTION_COMPLETE: [X] lignes traitées sur [X] lignes visibles.
-
-Si cette ligne n'apparaît pas, cela signifie que la réponse a été tronquée.`;
+<NATURES_POSSIBLE>
+Acte d’acquiescement / indivision temporaire
+Avis cadastral
+Avis de clôture de compte de liquidation successorale
+Avis de conservation d’une hypothèque légale de la construction
+Avis de contamination / restriction d’usage
+Avis de contamination / restriction d’utilisation / décontamination
+Avis de faillite
+Avis d’adresse
+Avis d’expropriation / réserve pour fins publiques
+Bail
+Billet de location (ancien droit)
+Certificat de localisation
+Certificat de propriété / recherche
+Confirmation
+Continuation de communauté
+Correction
+Dation en paiement
+Donation
+Douaire
+Déclaration de copropriété
+Déclaration de copropriété divise
+Déclaration de résidence familiale
+Déclaration modificative
+Emphytéose
+Expropriation
+Fiducie
+Hypothèque
+Jugement d’attribution
+Jugement en passation de titre
+Jugement en reconnaissance du droit de propriété (prescription acquisitive)
+Lettres patentes
+Loi sur la mainmorte
+Mainlevée
+Mandat
+Pacte de préférence / droit de préemption
+Partage
+Priorité
+Prise de possession à fins d’administration
+Prise en paiement
+Privilège (ancien droit)
+Procuration
+Procès-verbal d’abornement
+Promesse de vente
+Propriété superficiaire
+Préavis d’exercice d’un droit hypothécaire
+Quittance
+Ratification
+Renonciation
+Résiliation
+Résolution / Règlement
+Rétrocession
+Servitude
+Servitude d’environnement
+Sommaire
+Substitution
+Usufruit
+Vente
+Vente par le syndic
+Échange
+État certifié
+</NATURES_POSSIBLE>`;
 
 /**
  * OCR Boost Prompt for Quebec Land Registry Index Documents
@@ -286,20 +218,12 @@ INSTRUCTIONS FINALES :
 - Applique toutes les règles de boost pertinentes
 - Corrige les erreurs OCR évidentes
 - Standardise les noms d'entités (Hydro-Québec, RBC, etc.)
-- Présente le résultat en Markdown propre et bien structuré
-- Utilise des tableaux Markdown pour les données tabulaires
-- Mets en évidence les changements apportés par le boost (ex: "Nature corrigée: Servitude (était: Vente)")
-- Ajoute une section "📊 Règles de Boost Appliquées" à la fin listant les règles utilisées
+- CONSERVE LE FORMAT STRUCTURÉ EXACT du texte brut (ne convertis PAS en Markdown ou tableaux)
+- Garde les marqueurs de page "--- Page X ---" tels quels
+- Garde les sections "Métadonnées de l'En-tête :" et "Données du Tableau :" telles quelles
+- Garde le format "Ligne X:" pour chaque inscription
+- Garde tous les champs structurés (Date de présentation d'inscription:, Numéro:, Nature de l'acte:, etc.)
+- Applique les corrections UNIQUEMENT aux valeurs des champs, PAS à la structure
 
-RÈGLE ABSOLUE - TRAITEMENT COMPLET :
-Tu DOIS traiter TOUTES les lignes présentes dans le texte brut sans exception.
-Ne t'arrête JAMAIS à mi-chemin. Ne demande JAMAIS de confirmation.
-Continue jusqu'à ce que TOUTES les entrées soient boostées et présentées.
-Ceci est un processus AUTOMATIQUE - tu ne peux PAS demander si l'utilisateur veut que tu continues.
-
-MARQUEUR DE COMPLÉTION OBLIGATOIRE :
-Tu DOIS terminer ta réponse avec EXACTEMENT cette ligne :
-✅ BOOST_COMPLETE: [X] lignes traitées, [Y] corrections appliquées.
-
-Si cette ligne n'apparaît pas, cela signifie que la réponse a été tronquée.`;
+`;
 

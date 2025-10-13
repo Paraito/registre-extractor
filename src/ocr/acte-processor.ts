@@ -17,8 +17,6 @@ export interface ActeOCRProcessorConfig {
 export interface ActeOCRResult {
   rawText: string;
   boostedText: string;
-  extractionComplete: boolean;
-  boostComplete: boolean;
   fileName?: string;
 }
 
@@ -121,68 +119,59 @@ export class ActeOCRProcessor {
 
       // Step 3: Extract text from the uploaded file
       OCRLogger.debug(`🔍 Extracting text from acte document: ${documentNumber}`);
-      
+
       const extractionResult = await this.geminiClient.extractTextFromFile(
         uploadResult.fileName,
         uploadResult.fileUri,
         ACTE_EXTRACT_PROMPT,
         {
           model: this.extractModel,
-          temperature: this.extractTemperature,
-          maxAttempts: 3
+          temperature: this.extractTemperature
         }
       );
 
       const extractDuration = ((Date.now() - startTime) / 1000).toFixed(1);
-      
+
       OCRLogger.debug(
         `✅ Extraction complete (${extractDuration}s) - ` +
-        `${extractionResult.text.length} chars, ` +
-        `Complete: ${extractionResult.isComplete}`
+        `${extractionResult.text.length} chars`
       );
 
       logger.info({
         documentNumber,
         textLength: extractionResult.text.length,
-        isComplete: extractionResult.isComplete,
         duration: extractDuration
       }, 'Text extraction completed for acte');
 
       // Step 4: Apply boost corrections to the extracted text
       OCRLogger.debug(`🚀 Applying boost corrections: ${documentNumber}`);
-      
+
       const boostResult = await this.geminiClient.boostText(
         extractionResult.text,
         ACTE_BOOST_PROMPT,
         {
           model: this.boostModel,
-          temperature: this.boostTemperature,
-          maxAttempts: 3
+          temperature: this.boostTemperature
         }
       );
 
       const totalDuration = ((Date.now() - startTime) / 1000).toFixed(1);
-      
+
       OCRLogger.debug(
         `✅ Boost complete (${totalDuration}s total) - ` +
-        `${boostResult.boostedText.length} chars, ` +
-        `Complete: ${boostResult.isComplete}`
+        `${boostResult.boostedText.length} chars`
       );
 
       logger.info({
         documentNumber,
         rawTextLength: extractionResult.text.length,
         boostedTextLength: boostResult.boostedText.length,
-        extractionComplete: extractionResult.isComplete,
-        boostComplete: boostResult.isComplete,
         totalDuration
       }, 'Acte OCR processing completed');
 
       return {
         rawText: extractionResult.text,
         boostedText: boostResult.boostedText,
-        extractionComplete: extractionResult.isComplete,
-        boostComplete: boostResult.isComplete,
         fileName: uploadResult.fileName
       };
 
@@ -217,24 +206,9 @@ export class ActeOCRProcessor {
     pdfPath: string,
     documentNumber: string
   ): Promise<ActeOCRResult> {
-    // First attempt: try to process the entire document
+    // Process the entire document
     try {
       const result = await this.processActePDF(pdfPath, documentNumber);
-      
-      // If extraction is complete, return the result
-      if (result.extractionComplete && result.boostComplete) {
-        return result;
-      }
-
-      // If extraction is incomplete, log a warning
-      logger.warn({
-        documentNumber,
-        extractionComplete: result.extractionComplete,
-        boostComplete: result.boostComplete
-      }, 'Acte OCR processing incomplete - document may exceed token limits');
-
-      // For now, return the partial result
-      // TODO: Implement page-by-page chunking strategy if needed
       return result;
 
     } catch (error) {

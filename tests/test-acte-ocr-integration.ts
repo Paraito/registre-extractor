@@ -12,11 +12,11 @@
  *   npx ts-node test-acte-ocr-integration.ts [document-id]
  */
 
-import { ActeOCRProcessor } from './src/ocr/acte-processor';
-import { GeminiFileClient } from './src/ocr/gemini-file-client';
-import { supabaseManager, EnvironmentName } from './src/utils/supabase';
-import { config } from './src/config';
-import { EXTRACTION_STATUS } from './src/types';
+import { ActeOCRProcessor } from '../src/ocr/acte-processor';
+import { GeminiFileClient } from '../src/ocr/gemini-file-client';
+import { supabaseManager, EnvironmentName } from '../src/utils/supabase';
+import { config } from '../src/config';
+import { EXTRACTION_STATUS } from '../src/types';
 import fs from 'fs/promises';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';

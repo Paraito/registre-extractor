@@ -8,11 +8,11 @@
  * 4. Running a sample OCR process
  */
 
-import { OCRProcessor } from './src/ocr';
-import { config } from './src/config';
-import { logger } from './src/utils/logger';
-import { supabaseManager } from './src/utils/supabase';
-import { EXTRACTION_STATUS } from './src/types';
+import { OCRProcessor } from '../src/ocr';
+import { config } from '../src/config';
+import { logger } from '../src/utils/logger';
+import { supabaseManager } from '../src/utils/supabase';
+import { EXTRACTION_STATUS } from '../src/types';
 
 async function testOCRIntegration() {
   logger.info('🧪 Starting OCR Integration Test');

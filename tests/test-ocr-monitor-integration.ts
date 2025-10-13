@@ -3,7 +3,7 @@
  * Verifies that the monitor correctly uses the parallel processing with correct flow
  */
 
-import { logger } from './src/utils/logger';
+import { logger } from '../src/utils/logger';
 
 // Mock the processor to track method calls
 class MockOCRProcessor {

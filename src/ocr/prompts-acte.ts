@@ -97,17 +97,7 @@ Circonscription foncière : [nom]
 
 ---
 
-RÈGLE ABSOLUE - EXTRACTION COMPLÈTE :
-Tu DOIS extraire TOUT le texte du document sans exception.
-Ne t'arrête JAMAIS à mi-chemin. Ne demande JAMAIS de confirmation pour continuer.
-Continue page par page, section par section jusqu'à ce que TOUT le document soit extrait.
-Ceci est un processus AUTOMATIQUE - tu ne peux PAS demander si l'utilisateur veut que tu continues.
-
-MARQUEUR DE COMPLÉTION OBLIGATOIRE :
-Tu DOIS terminer ta réponse avec EXACTEMENT cette ligne :
-✅ EXTRACTION_COMPLETE: Document complet extrait.
-
-Si cette ligne n'apparaît pas, cela signifie que la réponse a été tronquée et nécessite une continuation.`;
+`;
 
 /**
  * OCR Boost Prompt for Quebec Land Registry Acte Documents
@@ -191,15 +181,5 @@ FORMAT DE SORTIE :
 - Mettre en évidence les corrections apportées
 - Ajouter une section finale "📊 CORRECTIONS APPLIQUÉES" listant les principales corrections
 
-RÈGLE ABSOLUE - TRAITEMENT COMPLET :
-Tu DOIS traiter TOUT le texte fourni sans exception.
-Ne t'arrête JAMAIS à mi-chemin. Ne demande JAMAIS de confirmation.
-Continue jusqu'à ce que TOUT le texte soit corrigé et standardisé.
-Ceci est un processus AUTOMATIQUE - tu ne peux PAS demander si l'utilisateur veut que tu continues.
-
-MARQUEUR DE COMPLÉTION OBLIGATOIRE :
-Tu DOIS terminer ta réponse avec EXACTEMENT cette ligne :
-✅ BOOST_COMPLETE: [X] corrections appliquées.
-
-Si cette ligne n'apparaît pas, cela signifie que la réponse a été tronquée.`;
+`;
 
