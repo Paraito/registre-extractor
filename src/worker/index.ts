@@ -505,7 +505,7 @@ export class ExtractionWorker {
         .from('extraction_queue')
         .update({
           status_id: finalStatus,
-          supabase_path: publicUrl,
+          supabase_path: storagePath,
           attemtps: (job.attemtps || 0) + 1,
         })
         .eq('id', job.id);

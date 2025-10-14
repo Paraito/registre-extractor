@@ -41,26 +41,40 @@ export class IndexFallbackHandler {
       try {
         logger.info({ attemptNum, maxAttempts }, `Starting fallback attempt ${attemptNum}/${maxAttempts}`);
 
-        // Step D: Always navigate to fresh index page
+        // Step 1: Always navigate to fresh index page
+        logger.debug({ attemptNum }, 'Step 1: Navigating to fresh index page');
         await this.navigateToFreshIndexPage();
+        logger.debug({ attemptNum }, 'Step 1: Navigation complete');
 
         // Step 2: Select circonscription (same for all attempts)
+        logger.debug({ attemptNum }, 'Step 2: Selecting circonscription');
         await this.selectCirconscription();
+        logger.debug({ attemptNum }, 'Step 2: Circonscription selected');
 
         // Step 3: Get cadastre options and select best match
+        logger.debug({ attemptNum }, 'Step 3: Selecting cadastre with LLM');
         const cadastreSelected = await this.selectCadastreWithLLM(contextString, attemptNum);
+        logger.debug({ attemptNum, cadastre: cadastreSelected.text }, 'Step 3: Cadastre selected');
 
         // Step 4: Get designation options and select best match
+        logger.debug({ attemptNum }, 'Step 4: Selecting designation with LLM');
         const designationSelected = await this.selectDesignationWithLLM(contextString, attemptNum);
+        logger.debug({ attemptNum, designation: designationSelected?.text }, 'Step 4: Designation selected');
 
         // Step 5: Fill lot number
+        logger.debug({ attemptNum }, 'Step 5: Filling lot number');
         await this.fillLotNumber();
+        logger.debug({ attemptNum }, 'Step 5: Lot number filled');
 
         // Step 6: Submit form
+        logger.debug({ attemptNum }, 'Step 6: Submitting form');
         await this.submitForm();
+        logger.debug({ attemptNum }, 'Step 6: Form submitted');
 
         // Step 7: Check for errors
+        logger.debug({ attemptNum }, 'Step 7: Checking for errors');
         const hasError = await this.checkForErrors();
+        logger.debug({ attemptNum, hasError }, 'Step 7: Error check complete');
 
         if (!hasError) {
           // Success! Document is loading or loaded
@@ -104,16 +118,24 @@ export class IndexFallbackHandler {
         }, 'Fallback attempt failed');
 
       } catch (error) {
-        logger.error({ attemptNum, error }, 'Error during fallback attempt');
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        const errorStack = error instanceof Error ? error.stack : undefined;
 
-        // Record error attempt
+        logger.error({
+          attemptNum,
+          error: errorMessage,
+          errorStack,
+          errorType: error instanceof Error ? error.constructor.name : typeof error
+        }, 'Error during fallback attempt');
+
+        // Record error attempt with detailed error info
         this.attempts.push({
           attemptNumber: attemptNum,
           cadastre: 'error',
           designation: 'error',
           reasoning: 'Exception during attempt',
           result: 'failed',
-          errorMessage: error instanceof Error ? error.message : String(error)
+          errorMessage: `${errorMessage}${errorStack ? '\n' + errorStack.substring(0, 200) : ''}`
         });
       }
     }
@@ -494,6 +516,31 @@ export class IndexFallbackHandler {
       });
 
       const data = await response.json() as any;
+
+      // Check for OpenAI API errors
+      if (!response.ok) {
+        const errorMsg = data.error?.message || data.error || 'Unknown API error';
+        logger.error({
+          dropdownType,
+          status: response.status,
+          statusText: response.statusText,
+          error: errorMsg,
+          errorType: data.error?.type,
+          errorCode: data.error?.code
+        }, 'OpenAI API request failed');
+        throw new Error(`OpenAI API error (${response.status}): ${errorMsg}`);
+      }
+
+      // Check response structure
+      if (!data.choices || !data.choices[0] || !data.choices[0].message) {
+        logger.error({
+          dropdownType,
+          responseKeys: Object.keys(data),
+          hasChoices: !!data.choices
+        }, 'OpenAI API returned unexpected response structure');
+        throw new Error('OpenAI API returned unexpected response structure');
+      }
+
       const result = JSON.parse(data.choices[0].message.content);
 
       if (result.index !== null && result.index >= 0 && result.index < filteredOptions.length) {
@@ -508,7 +555,11 @@ export class IndexFallbackHandler {
       return null;
 
     } catch (error) {
-      logger.error({ error, dropdownType }, 'LLM selection failed');
+      logger.error({
+        error: error instanceof Error ? error.message : String(error),
+        errorStack: error instanceof Error ? error.stack : undefined,
+        dropdownType
+      }, 'LLM selection failed');
       return null;
     }
   }
