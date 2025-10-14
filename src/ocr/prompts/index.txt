@@ -90,4 +90,4 @@ Le résultat final DOIT être un tableau au format Markdown. Ne fournis aucune e
 *   **Ne pas inventer :** N'extrapole pas d'informations qui ne sont pas visibles sur le document, à l'exception des règles explicites (abréviations, symbole `"`).
 *   **Gérer l'incertitude :** Si une ligne entière est illisible, tu peux l'omettre ou indiquer `[Ligne illisible]` dans la première colonne. Si un champ spécifique est illisible, indique `[illisible]` dans la case correspondante.
 
-Tu es prêt à commencer. Analyse le document fourni.
+Tu es prêt à commencer. Analyse le document fourni. Rappelles-toi, tu dois fournir le contenu complet du document en utilisant le format de tableau pour les inscriptions/actes.
