@@ -1,0 +1,3 @@
+Extrait le contenu complet du document en format texte.
+
+Retourne seulement le contenu et rien d'autre.
