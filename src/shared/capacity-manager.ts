@@ -5,7 +5,8 @@
  * Prevents server overload by tracking resource allocation.
  */
 
-import { createClient, RedisClientType } from 'redis';
+import { createClient } from 'redis';
+import type { RedisClientType } from 'redis';
 import { logger } from '../utils/logger';
 
 export type WorkerType = 'registre' | 'index-ocr' | 'acte-ocr';
@@ -82,7 +83,7 @@ export class ServerCapacityManager {
     });
     
     // Handle Redis errors
-    this.redis.on('error', (err) => {
+    this.redis.on('error', (err: Error) => {
       logger.error({ error: err }, 'Redis error in capacity manager');
       this.isConnected = false;
     });
@@ -259,7 +260,7 @@ export class ServerCapacityManager {
     }
     
     const workers = await this.redis.hGetAll(this.WORKERS_KEY);
-    return Object.values(workers).map(data => JSON.parse(data));
+    return Object.values(workers).map(data => JSON.parse(data as string));
   }
   
   /**

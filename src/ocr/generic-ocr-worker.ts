@@ -97,8 +97,8 @@ export class GenericOCRWorker {
         geminiApiKey: process.env.GEMINI_API_KEY,
         tempDir: path.join(os.tmpdir(), 'ocr-acte-processing')
       });
-      
-      await this.acteProcessor.ensureTempDir();
+
+      await this.acteProcessor.initialize();
     }
     
     // Start heartbeat

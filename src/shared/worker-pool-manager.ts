@@ -5,7 +5,8 @@
  * based on queue composition. Rebalances every 30 seconds.
  */
 
-import { createClient, RedisClientType } from 'redis';
+import { createClient } from 'redis';
+import type { RedisClientType } from 'redis';
 import { createClient as createSupabaseClient, SupabaseClient } from '@supabase/supabase-js';
 import { logger } from '../utils/logger';
 import { config } from '../config';
@@ -66,7 +67,7 @@ export class WorkerPoolManager {
     });
     
     // Handle Redis errors
-    this.redis.on('error', (err) => {
+    this.redis.on('error', (err: Error) => {
       logger.error({ error: err }, 'Redis error in worker pool manager');
       this.isConnected = false;
     });
@@ -122,16 +123,16 @@ export class WorkerPoolManager {
    */
   private initializeSupabaseClients(): void {
     const environments = config.environments;
-    
+
     for (const [envName, envConfig] of Object.entries(environments)) {
-      if (envConfig.url && envConfig.serviceKey) {
+      if (envConfig && envConfig.url && envConfig.serviceKey) {
         const client = createSupabaseClient(envConfig.url, envConfig.serviceKey, {
           auth: {
             persistSession: false,
             autoRefreshToken: false
           }
         });
-        
+
         this.supabaseClients.set(envName, client);
         logger.info({ environment: envName }, 'Initialized Supabase client for pool manager');
       }

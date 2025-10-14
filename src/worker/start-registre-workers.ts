@@ -10,7 +10,6 @@
 import { ExtractionWorker } from './index';
 import { ServerCapacityManager, ServerCapacity } from '../shared/capacity-manager';
 import { logger } from '../utils/logger';
-import { config } from '../config';
 import { v4 as uuidv4 } from 'uuid';
 import * as dotenv from 'dotenv';
 

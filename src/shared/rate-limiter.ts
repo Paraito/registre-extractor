@@ -5,7 +5,8 @@
  * Ensures we never exceed Gemini Tier 3 limits (2000 RPM, 8M TPM).
  */
 
-import { createClient, RedisClientType } from 'redis';
+import { createClient } from 'redis';
+import type { RedisClientType } from 'redis';
 import { logger } from '../utils/logger';
 
 // Gemini Tier 3 Rate Limits (safe thresholds at 80% of max)
@@ -54,7 +55,7 @@ export class SharedRateLimiter {
     });
     
     // Handle Redis errors
-    this.redis.on('error', (err) => {
+    this.redis.on('error', (err: Error) => {
       logger.error({ error: err }, 'Redis error in rate limiter');
       this.isConnected = false;
     });
@@ -270,7 +271,7 @@ export class SharedRateLimiter {
     const activeWorkers: WorkerInfo[] = [];
     
     for (const [workerId, data] of Object.entries(workers)) {
-      const worker: WorkerInfo = JSON.parse(data);
+      const worker: WorkerInfo = JSON.parse(data as string);
       
       // Consider worker active if heartbeat within last 30 seconds
       if (now - worker.lastHeartbeat < 30000) {
