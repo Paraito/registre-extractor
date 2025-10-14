@@ -34,7 +34,7 @@ module.exports = {
     // OCR Workers (processes documents with Gemini File API)
     // Requires: GEMINI_API_KEY and OCR_PROD=true in .env
     {
-      name: 'ocr-worker',
+      name: 'registre-ocr',
       script: 'dist/ocr/start-ocr-workers.js',
       instances: 1,
       autorestart: true,
@@ -42,7 +42,7 @@ module.exports = {
       max_memory_restart: '512M',
       env: {
         NODE_ENV: 'production',
-        OCR_WORKER_COUNT: 2
+        OCR_WORKER_COUNT: 5
       }
     },
 

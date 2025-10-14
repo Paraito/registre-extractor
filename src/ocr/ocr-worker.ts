@@ -380,23 +380,36 @@ export class OCRWorker {
       throw new Error('No supabase_path found for job');
     }
 
-    // Determine bucket based on document_source
-    const bucketMap: Record<string, string> = {
-      'index': 'index',
-      'acte': 'actes',
-      'plan_cadastraux': 'plans-cadastraux',
-    };
+    // Parse bucket and file path from supabase_path
+    // Format: "bucket/filename.pdf" or just "filename.pdf" (legacy)
+    let bucketName: string;
+    let filePath: string;
 
-    const bucketName = bucketMap[job.document_source];
-    if (!bucketName) {
-      throw new Error(`Unknown document_source: ${job.document_source}`);
+    if (job.supabase_path.includes('/')) {
+      // New format: "bucket/filename.pdf"
+      const parts = job.supabase_path.split('/');
+      bucketName = parts[0];
+      filePath = parts.slice(1).join('/');
+    } else {
+      // Legacy format: just "filename.pdf" - determine bucket from document_source
+      const bucketMap: Record<string, string> = {
+        'index': 'index',
+        'acte': 'actes',
+        'plan_cadastraux': 'plans-cadastraux',
+      };
+      bucketName = bucketMap[job.document_source];
+      filePath = job.supabase_path;
+
+      if (!bucketName) {
+        throw new Error(`Unknown document_source: ${job.document_source}`);
+      }
     }
 
-    logger.info({ bucket: bucketName, path: job.supabase_path }, 'Downloading file from Supabase');
+    logger.info({ bucket: bucketName, path: filePath }, 'Downloading file from Supabase');
 
     const { data, error } = await client.storage
       .from(bucketName)
-      .download(job.supabase_path);
+      .download(filePath);
 
     if (error || !data) {
       throw new Error(`Failed to download file: ${error?.message || 'Unknown error'}`);

@@ -476,6 +476,8 @@ export class ExtractionWorker {
       const fileContent = await fs.readFile(localFilePath);
 
       const storagePath = `${fileName}`;
+      // Full path including bucket for supabase_path field (more explicit)
+      const fullPath = `${bucketName}/${fileName}`;
 
       const { error: uploadError } = await client.storage
         .from(bucketName)
@@ -505,7 +507,7 @@ export class ExtractionWorker {
         .from('extraction_queue')
         .update({
           status_id: finalStatus,
-          supabase_path: storagePath,
+          supabase_path: fullPath, // Store full path with bucket prefix
           attemtps: (job.attemtps || 0) + 1,
         })
         .eq('id', job.id);
