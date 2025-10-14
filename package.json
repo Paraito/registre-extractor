@@ -6,8 +6,14 @@
   "scripts": {
     "postinstall": "playwright install chromium",
     "dev": "tsx watch src/worker/index.ts",
+    "registre:dev": "tsx watch src/worker/start-registre-workers.ts",
+    "registre:start": "node dist/worker/start-registre-workers.js",
     "monitor:dev": "tsx watch src/monitor/index.ts",
     "ocr:dev": "tsx watch src/ocr/monitor.ts",
+    "ocr:pool:dev": "tsx watch src/ocr/start-worker-pool.ts",
+    "ocr:pool:start": "node dist/ocr/start-worker-pool.js",
+    "workers:dev": "tsx watch src/start-all-workers.ts",
+    "workers:start": "node dist/start-all-workers.js",
     "build": "tsc && cp src/api/dashboard.html dist/api/",
     "start": "node dist/worker/index.js",
     "monitor": "node dist/monitor/index.js",
@@ -55,6 +61,7 @@
     "pino": "^8.17.2",
     "pino-pretty": "^10.3.1",
     "playwright": "^1.40.1",
+    "redis": "^4.6.13",
     "uuid": "^9.0.1",
     "winston": "^3.11.0",
     "zod": "^3.22.4"

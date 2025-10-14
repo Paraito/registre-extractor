@@ -1,0 +1,24 @@
+{
+  "name": "ocr-king",
+  "version": "1.0.0",
+  "description": "OCR application for Quebec land registry documents using Gemini AI",
+  "private": true,
+  "scripts": {
+    "install:all": "npm install --prefix backend && npm install --prefix frontend",
+    "dev:backend": "npm start --prefix backend",
+    "dev:frontend": "npm run dev --prefix frontend",
+    "build:frontend": "npm run build --prefix frontend",
+    "start:backend": "npm start --prefix backend",
+    "start:frontend": "npm run preview --prefix frontend"
+  },
+  "keywords": [
+    "ocr",
+    "gemini",
+    "land-registry",
+    "quebec",
+    "ai"
+  ],
+  "author": "",
+  "license": "MIT"
+}
+

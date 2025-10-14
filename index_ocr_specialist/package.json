@@ -1,24 +1,51 @@
 {
   "name": "ocr-king",
   "version": "1.0.0",
-  "description": "OCR application for Quebec land registry documents using Gemini AI",
+  "description": "Multi-model PDF OCR pipeline for Quebec land registry documents",
   "private": true,
+  "type": "module",
   "scripts": {
-    "install:all": "npm install --prefix backend && npm install --prefix frontend",
-    "dev:backend": "npm start --prefix backend",
-    "dev:frontend": "npm run dev --prefix frontend",
-    "build:frontend": "npm run build --prefix frontend",
-    "start:backend": "npm start --prefix backend",
-    "start:frontend": "npm run preview --prefix frontend"
+    "build": "tsc",
+    "start": "node dist/src/server/cli.js run",
+    "dev": "tsx src/server/cli.ts run",
+    "test:e2e:gemini": "tsx src/server/cli.ts test --model gemini",
+    "test:e2e:qwen3": "tsx src/server/cli.ts test --model qwen3",
+    "cli": "tsx src/server/cli.ts",
+    "process-queue": "tsx src/server/cli.ts process-queue",
+    "worker": "tsx src/worker/cli.ts",
+    "analyze-throughput": "tsx scripts/analyze-throughput.ts",
+    "legacy:install": "cd backend && npm install",
+    "legacy:start": "cd backend && npm start",
+    "legacy:test": "cd backend && npm test"
   },
   "keywords": [
     "ocr",
     "gemini",
+    "claude",
+    "qwen3",
     "land-registry",
     "quebec",
-    "ai"
+    "ai",
+    "pipeline",
+    "multi-model"
   ],
   "author": "",
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.65.0",
+    "@google/generative-ai": "^0.21.0",
+    "@supabase/supabase-js": "^2.39.0",
+    "dotenv": "^16.4.5",
+    "node-fetch": "^3.3.2",
+    "pdf-to-png-converter": "^3.10.0",
+    "redis": "^4.6.0",
+    "sharp": "^0.34.4",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0"
+  }
 }
 

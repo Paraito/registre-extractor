@@ -1,42 +1,39 @@
-# 🏛️ OCR KING - Registre Foncier OCR
+# 🏛️ OCR KING - Registre Foncier OCR (Backend)
 
-A powerful OCR application for Quebec land registry documents using Google's Gemini AI. This application provides advanced text extraction with confidence scoring and intelligent boost corrections using 60+ domain-specific rules.
+**⚠️ NOTE: This is the original standalone OCR system. The OCR functionality has been integrated into the main registre-extractor application under `src/ocr/`. This directory is kept for reference only.**
+
+A powerful OCR backend for Quebec land registry documents using Google's Gemini AI. This backend provides advanced text extraction with confidence scoring and intelligent boost corrections using 60+ domain-specific rules.
 
 ## ✨ Features
 
-- **🖼️ Image Upload**: Drag & drop or click to upload land registry images
 - **🔍 Advanced OCR**: Extract text with confidence scoring for critical fields
-- **⚡ Image Upscaling**: Browser-based image enhancement (1.5x to 4x) before OCR
 - **🎯 Smart Boost**: Apply 60+ correction rules for Quebec land registry documents
 - **🎛️ Model Selection**: Choose from multiple Gemini models
 - **🌡️ Temperature Control**: Fine-tune extraction and boost precision
-- **📋 Copy to Clipboard**: Easy result copying
-- **📊 Dual View**: Compare raw extraction vs boosted results
+- **📊 Dual Processing**: Raw extraction + boosted results
 
 ## 🏗️ Architecture
 
 ```
-workspace/
-├── frontend/          # React + Vite + Tailwind CSS
-│   ├── src/
-│   │   ├── App.jsx   # Main OCR component
-│   │   ├── main.jsx
-│   │   └── index.css
-│   └── package.json
+index_ocr_specialist/
 ├── backend/           # Express + Gemini API
 │   ├── server.js     # API endpoints
 │   └── package.json
 └── README.md
 ```
 
-## 🚀 Quick Start
+**Note:** The frontend has been removed. The OCR functionality is now integrated into the main application.
+
+## 🚀 Quick Start (Standalone Backend)
+
+**⚠️ For production use, please use the integrated OCR system in the main application (`src/ocr/`).**
 
 ### Prerequisites
 
 - Node.js 18+ installed
 - Gemini API key from [Google AI Studio](https://aistudio.google.com/app/apikey)
 
-### 1. Backend Setup
+### Backend Setup
 
 ```bash
 cd backend
@@ -58,20 +55,24 @@ npm start
 
 The backend will run on `http://localhost:3001`
 
-### 2. Frontend Setup
+## 🔗 Integration with Main Application
+
+The OCR functionality has been integrated into the main registre-extractor application:
+
+- **Location**: `src/ocr/`
+- **Monitor Service**: `src/ocr/monitor.ts` - Automatically processes completed index documents
+- **Processor**: `src/ocr/processor.ts` - Handles PDF conversion and OCR processing
+- **Gemini Client**: `src/ocr/gemini-client.ts` - Interfaces with Google's Gemini AI
+
+To run the integrated OCR monitor:
 
 ```bash
-cd frontend
-npm install
+# Development mode
+npm run ocr:dev
+
+# Production mode
+npm run ocr
 ```
-
-Start the development server:
-
-```bash
-npm run dev
-```
-
-The frontend will open automatically at `http://localhost:5173`
 
 ## 📖 Usage
 
