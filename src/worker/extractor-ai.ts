@@ -25,7 +25,10 @@ export class AIRegistreExtractor {
     private workerId: string,
     private headless: boolean = true
   ) {
-    this.downloadPath = path.join(process.cwd(), 'downloads', this.workerId);
+    // Use /tmp for downloads in Docker to avoid permission issues
+    // /tmp is always writable by all users
+    const baseDir = process.env.DOWNLOADS_DIR || '/tmp/registre-downloads';
+    this.downloadPath = path.join(baseDir, this.workerId);
     this.visionAnalyzer = new VisionAnalyzer();
     this.patternAnalyzer = new PatternBasedAnalyzer();
   }

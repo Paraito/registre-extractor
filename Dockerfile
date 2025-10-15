@@ -55,12 +55,10 @@ RUN groupadd -r extractor && useradd -r -g extractor extractor
 # CRITICAL: Copy Playwright browsers from root cache to app directory
 # This ensures the non-root user can access them
 RUN mkdir -p /app/.cache && \
-    cp -r /root/.cache/ms-playwright /app/.cache/
+    cp -r /root/.cache/ms-playwright /app/.cache/ && \
+    chown -R extractor:extractor /app
 
-# Create downloads directory and set ownership to extractor user
-RUN mkdir -p /app/downloads && \
-    chown -R extractor:extractor /app && \
-    chmod -R 755 /app
+# Note: Downloads will use /tmp which is always writable by all users
 
 # Set Playwright to use the app cache directory
 ENV PLAYWRIGHT_BROWSERS_PATH=/app/.cache/ms-playwright
