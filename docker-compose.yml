@@ -1,0 +1,182 @@
+version: '3.8'
+
+services:
+  # Redis for Bull queue
+  redis:
+    image: redis:7-alpine
+    container_name: registre-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # Extraction Workers (3 instances for concurrency)
+  registre-worker-1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: registre-worker-1
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+      - WORKER_ID=worker-1
+      - WORKER_COUNT=3
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./downloads:/app/downloads
+    command: ["node", "dist/worker/index.js"]
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 1G
+
+  registre-worker-2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: registre-worker-2
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+      - WORKER_ID=worker-2
+      - WORKER_COUNT=3
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./downloads:/app/downloads
+    command: ["node", "dist/worker/index.js"]
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 1G
+
+  registre-worker-3:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: registre-worker-3
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+      - WORKER_ID=worker-3
+      - WORKER_COUNT=3
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./downloads:/app/downloads
+    command: ["node", "dist/worker/index.js"]
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 1G
+
+  # OCR Workers (5 workers in single container)
+  registre-ocr:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: registre-ocr
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+      - OCR_WORKER_COUNT=5
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: ["node", "dist/ocr/start-ocr-workers.js"]
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
+
+  # Health Monitor
+  registre-monitor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: registre-monitor
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: ["node", "dist/monitor/index.js"]
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+
+  # API Server
+  registre-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: registre-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+      - API_PORT=3000
+      - API_HOST=0.0.0.0
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    command: ["node", "dist/api/index.js"]
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+
+volumes:
+  redis-data:
+    driver: local
+
