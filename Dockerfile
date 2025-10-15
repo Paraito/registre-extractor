@@ -49,18 +49,18 @@ RUN npm run build
 # Set environment
 ENV NODE_ENV=production
 
-# Create non-root user and set up permissions
+# Create non-root user FIRST
 RUN groupadd -r extractor && useradd -r -g extractor extractor
-
-# Create downloads directory with proper permissions
-RUN mkdir -p /app/downloads && \
-    chmod 777 /app/downloads
 
 # CRITICAL: Copy Playwright browsers from root cache to app directory
 # This ensures the non-root user can access them
 RUN mkdir -p /app/.cache && \
-    cp -r /root/.cache/ms-playwright /app/.cache/ && \
-    chown -R extractor:extractor /app
+    cp -r /root/.cache/ms-playwright /app/.cache/
+
+# Create downloads directory and set ownership to extractor user
+RUN mkdir -p /app/downloads && \
+    chown -R extractor:extractor /app && \
+    chmod -R 755 /app
 
 # Set Playwright to use the app cache directory
 ENV PLAYWRIGHT_BROWSERS_PATH=/app/.cache/ms-playwright
