@@ -5,7 +5,7 @@
  * Both providers require images, so PDFs are always converted to images first
  */
 
-import { GeminiOCRClient } from './gemini-client';
+import { GeminiClient } from './gemini-client';
 import { ClaudeOCRClient } from './claude-ocr-client';
 import { PDFConverter } from './pdf-converter';
 import { OCRLogger } from './ocr-logger';
@@ -45,17 +45,16 @@ export interface MultiPageOCRResult {
 }
 
 export class UnifiedOCRProcessor {
-  private geminiClient: GeminiOCRClient;
+  private geminiClient: GeminiClient;
   private claudeClient: ClaudeOCRClient;
   private pdfConverter: PDFConverter;
   private preferredProvider: 'gemini' | 'claude';
 
   constructor(config: UnifiedOCRConfig) {
-    this.geminiClient = new GeminiOCRClient({
-      apiKey: config.geminiApiKey,
-      model: config.extractModel?.gemini,
-      temperature: config.extractTemperature,
-    });
+    this.geminiClient = new GeminiClient(
+      config.geminiApiKey,
+      config.extractModel?.gemini || 'gemini-2.0-flash-exp'
+    );
 
     this.claudeClient = new ClaudeOCRClient({
       apiKey: config.claudeApiKey,
@@ -215,7 +214,7 @@ export class UnifiedOCRProcessor {
         page.base64Data,
         page.mimeType,
         EXTRACT_PROMPT
-      ).then(result => ({
+      ).then((result: { text: string }) => ({
         pageNumber: index + 1,
         rawText: result.text,
         extractionComplete: true,

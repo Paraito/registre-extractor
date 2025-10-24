@@ -9,12 +9,9 @@
  * - Acte documents (using File API for direct PDF processing)
  */
 
-export { GeminiOCRClient, GeminiOCRConfig, OCRExtractionResult, OCRBoostResult } from './gemini-client';
+export { GeminiClient, GeminiUploadResult, GeminiOCRResult } from './gemini-client';
 export { GeminiFileClient, GeminiFileClientConfig, FileUploadResult, FileProcessingStatus, OCRFileExtractionResult } from './gemini-file-client';
 export { PDFConverter, PDFToImageOptions, ConversionResult, MultiPageConversionResult } from './pdf-converter';
-export { OCRProcessor, OCRProcessorConfig, OCRResult, PageOCRResult, MultiPageOCRResult } from './processor';
-export { ActeOCRProcessor, ActeOCRProcessorConfig, ActeOCRResult } from './acte-processor';
-export { OCRMonitor, OCRMonitorConfig } from './monitor';
 export { StaleOCRMonitor, staleOCRMonitor } from './stale-ocr-monitor';
 export { OCRLogger } from './ocr-logger';
 export { sanitizeOCRResult } from './sanitizer';

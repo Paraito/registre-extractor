@@ -1,4 +1,4 @@
-import { GeminiOCRClient } from './gemini-client';
+import { GeminiClient } from './gemini-client';
 import { PDFConverter } from './pdf-converter';
 import { EXTRACT_PROMPT, BOOST_PROMPT } from './prompts';
 import { logger } from '../utils/logger';
@@ -37,7 +37,7 @@ export interface MultiPageOCRResult {
  * Main OCR Processor that orchestrates PDF conversion, text extraction, and boosting
  */
 export class OCRProcessor {
-  private geminiClient: GeminiOCRClient;
+  private geminiClient: GeminiClient;
   private pdfConverter: PDFConverter;
   private extractModel: string;
   private boostModel: string;
@@ -45,11 +45,10 @@ export class OCRProcessor {
   private boostTemperature: number;
 
   constructor(config: OCRProcessorConfig) {
-    this.geminiClient = new GeminiOCRClient({
-      apiKey: config.geminiApiKey,
-      model: config.extractModel || 'gemini-2.0-flash-exp',
-      temperature: config.extractTemperature || 0.1
-    });
+    this.geminiClient = new GeminiClient(
+      config.geminiApiKey,
+      config.extractModel || 'gemini-2.0-flash-exp'
+    );
 
     this.pdfConverter = new PDFConverter(config.tempDir);
     this.extractModel = config.extractModel || 'gemini-2.0-flash-exp';
