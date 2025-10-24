@@ -234,7 +234,12 @@ export class OCRWorker {
     // Poll all enabled environments for pending OCR jobs
     for (const env of environments) {
       const client = supabaseManager.getServiceClient(env);
-      if (!client) continue;
+      if (!client) {
+        logger.debug({ environment: env, workerId: this.workerId }, 'No client available for environment');
+        continue;
+      }
+
+      logger.debug({ environment: env, workerId: this.workerId }, 'Polling for OCR jobs');
 
       // Find jobs ready for OCR: status_id=3, has supabase_path, ocr_attempts < ocr_max_attempts
       const { data, error } = await client
@@ -246,11 +251,33 @@ export class OCRWorker {
         .order('created_at', { ascending: true })
         .limit(1);
 
-      if (error || !data || data.length === 0) {
+      if (error) {
+        logger.error({
+          error,
+          environment: env,
+          workerId: this.workerId,
+          errorMessage: error.message,
+          errorDetails: error.details,
+          errorHint: error.hint,
+        }, 'Error querying for OCR jobs');
+        continue;
+      }
+
+      if (!data || data.length === 0) {
+        logger.debug({ environment: env, workerId: this.workerId }, 'No OCR jobs found in environment');
         continue;
       }
 
       const job = data[0];
+      logger.debug({
+        jobId: job.id,
+        environment: env,
+        workerId: this.workerId,
+        documentNumber: job.document_number,
+        documentSource: job.document_source,
+        ocrAttempts: job.ocr_attempts,
+        ocrMaxAttempts: job.ocr_max_attempts,
+      }, 'Found OCR job, attempting to claim');
 
       // Try to claim the job atomically
       const { data: claimedJob, error: claimError } = await client
@@ -265,8 +292,23 @@ export class OCRWorker {
         .select()
         .single();
 
-      if (claimError || !claimedJob) {
-        // Another worker claimed it
+      if (claimError) {
+        logger.warn({
+          error: claimError,
+          jobId: job.id,
+          environment: env,
+          workerId: this.workerId,
+          errorMessage: claimError.message,
+        }, 'Error claiming OCR job');
+        continue;
+      }
+
+      if (!claimedJob) {
+        logger.debug({
+          jobId: job.id,
+          environment: env,
+          workerId: this.workerId,
+        }, 'Job was claimed by another worker');
         continue;
       }
 
@@ -278,6 +320,7 @@ export class OCRWorker {
       };
     }
 
+    logger.debug({ workerId: this.workerId }, 'No OCR jobs available in any environment');
     return null;
   }
 
