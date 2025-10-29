@@ -384,8 +384,14 @@ export class OCRWorker {
         prompt
       );
 
-      // Cleanup local file
-      await fs.unlink(localFilePath);
+      // Cleanup local file (check if exists first to avoid ENOENT errors)
+      try {
+        await fs.unlink(localFilePath);
+      } catch (unlinkError: any) {
+        if (unlinkError.code !== 'ENOENT') {
+          logger.warn({ error: unlinkError, localFilePath }, 'Failed to delete temp file (non-critical)');
+        }
+      }
 
       if (!result.success) {
         throw new Error(result.error || 'OCR extraction failed');

@@ -168,8 +168,8 @@ export class IndexFallbackHandler {
       timeout: 30000
     });
 
-    // Wait for form to be ready
-    await this.page.waitForSelector('#selCircnFoncr', { state: 'visible', timeout: 10000 });
+    // Wait for form to be ready (increased timeout for slow loads)
+    await this.page.waitForSelector('#selCircnFoncr', { state: 'visible', timeout: 30000 });
   }
 
   /**

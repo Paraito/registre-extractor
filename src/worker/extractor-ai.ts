@@ -11,6 +11,69 @@ import { SmartElementFinder } from '../utils/smart-element-finder';
 import { extractSelectOptions, SelectOption } from '../utils/fuzzy-matcher';
 import { IndexFallbackHandler } from './extractor-index-fallback';
 
+/**
+ * Helper function to safely select an option from a dropdown
+ * This avoids "Execution context was destroyed" errors by not holding element references
+ */
+async function safeSelectOption(
+  page: Page,
+  selector: string,
+  targetValue: string,
+  options: {
+    waitForNavigation?: boolean;
+    timeout?: number;
+    specialValue?: string; // For special cases like Cadastre du Québec = '000001'
+  } = {}
+): Promise<void> {
+  const { waitForNavigation = true, timeout = 30000, specialValue } = options;
+
+  try {
+    // Get current value
+    const currentValue = await page.$eval(selector, (el: any) =>
+      el.options[el.selectedIndex]?.text?.trim() || ''
+    ).catch(() => '');
+
+    if (currentValue === targetValue) {
+      logger.debug({ selector, targetValue }, 'Option already selected');
+      return;
+    }
+
+    // If special value provided, use it directly
+    if (specialValue) {
+      logger.debug({ selector, targetValue, specialValue }, 'Using special value');
+      await page.selectOption(selector, { value: specialValue });
+    } else {
+      // Find best matching option
+      const element = await page.$(selector);
+      if (!element) {
+        throw new Error(`Element not found: ${selector}`);
+      }
+
+      const bestOption = await findBestSelectOption(element, targetValue);
+      if (!bestOption) {
+        throw new Error(`No matching option found for: ${targetValue}`);
+      }
+
+      logger.debug({ selector, targetValue, found: bestOption.text }, 'Selecting option');
+
+      // Select the option using page.selectOption (more reliable than element.selectOption)
+      await page.selectOption(selector, { value: bestOption.value });
+    }
+
+    // Wait for navigation/reload if needed
+    if (waitForNavigation) {
+      await page.waitForLoadState('networkidle', { timeout });
+    }
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    // Don't throw on context destroyed errors during navigation - this is expected
+    if (!errorMsg.includes('context') && !errorMsg.includes('destroyed')) {
+      throw error;
+    }
+    logger.debug({ selector, error: errorMsg }, 'Context error during selection (expected during navigation)');
+  }
+}
+
 export class AIRegistreExtractor {
   private browser: Browser | null = null;
   private context: BrowserContext | null = null;
@@ -647,7 +710,7 @@ export class AIRegistreExtractor {
         await this.page.waitForTimeout(2000); // Give page time to stabilize
 
         try {
-          await this.page.waitForSelector('#selCircnFoncr', { state: 'visible', timeout: 10000 });
+          await this.page.waitForSelector('#selCircnFoncr', { state: 'visible', timeout: 30000 });
           logger.info({ attempt }, 'Page reloaded and ready');
         } catch (waitError) {
           logger.error({ attempt, error: waitError }, 'Failed to wait for page elements after reload');
@@ -656,21 +719,9 @@ export class AIRegistreExtractor {
 
         // Step 1: Select Circonscription (same for all attempts)
         logger.info('Step 1: Selecting circonscription');
-        const circumscriptionSelect = await this.page.$('#selCircnFoncr');
-        if (circumscriptionSelect) {
-          const currentText = await circumscriptionSelect.evaluate((el: any) =>
-            el.options[el.selectedIndex]?.text?.trim() || ''
-          );
-
-          if (currentText !== config.circumscription) {
-            const bestOption = await findBestSelectOption(circumscriptionSelect, config.circumscription);
-            if (bestOption) {
-              await circumscriptionSelect.selectOption({ value: bestOption.value });
-              await this.page.waitForLoadState('networkidle', { timeout: 30000 });
-              await this.page.waitForSelector('#selCadst', { state: 'visible', timeout: 10000 });
-            }
-          }
-        }
+        await safeSelectOption(this.page, '#selCircnFoncr', config.circumscription);
+        // Wait for cadastre dropdown to appear after selection
+        await this.page.waitForSelector('#selCadst', { state: 'visible', timeout: 10000 });
 
         // Step 2: Intelligent Cadastre Selection
         logger.info({ attempt, failedCadastres }, 'Step 2: Selecting cadastre with LLM');
@@ -767,19 +818,17 @@ export class AIRegistreExtractor {
               reasoning: selectionReasoning
             }, 'Selecting cadastre');
 
-            await cadastreSelect.selectOption({ value: cadastreToSelect.value });
+            // Use page.selectOption instead of element.selectOption to avoid context errors
+            await this.page.selectOption('#selCadst', { value: cadastreToSelect.value });
             await this.page.waitForLoadState('networkidle', { timeout: 30000 });
           }
         }
 
         // Step 3: Fill lot number
         logger.info('Step 3: Filling lot number');
-        const lotNumberInput = await this.page.$('#txtNumrtLot');
-        if (lotNumberInput) {
-          await lotNumberInput.fill('');
-          const lotNumberNoSpaces = config.lot_number?.replace(/\s+/g, '') || '';
-          await lotNumberInput.fill(lotNumberNoSpaces);
-        }
+        const lotNumberNoSpaces = config.lot_number?.replace(/\s+/g, '') || '';
+        await this.page.fill('#txtNumrtLot', '');
+        await this.page.fill('#txtNumrtLot', lotNumberNoSpaces);
 
         // Step 4: Process Designation Secondaire (after cadastre is selected)
         logger.info({ selectedCadastre, attempt }, 'Step 4: Processing designation secondaire');
@@ -876,7 +925,8 @@ export class AIRegistreExtractor {
                 reasoning
               }, 'Selecting designation based on LLM');
 
-              await designationSelect.selectOption({ value: bestOption.value });
+              // Use page.selectOption instead of element.selectOption to avoid context errors
+              await this.page.selectOption('#selDesgnSecnd', { value: bestOption.value });
 
               // Wait for any form updates after designation selection
               await this.page.waitForTimeout(500);
@@ -1175,38 +1225,14 @@ export class AIRegistreExtractor {
       // Since we know the exact IDs and structure, let's use direct selectors for reliability
       logger.info('Using hybrid approach: AI for discovery, direct selectors for interaction');
 
-      // First ensure we're on the right page
-      await this.page.waitForSelector('#selCircnFoncr', { state: 'visible', timeout: 10000 });
+      // First ensure we're on the right page (increased timeout for slow loads)
+      await this.page.waitForSelector('#selCircnFoncr', { state: 'visible', timeout: 30000 });
       
       // Select Circonscription foncière with fuzzy matching
       logger.info('Selecting circumscription dropdown');
-      const circumscriptionSelect = await this.page.$('#selCircnFoncr');
-      if (circumscriptionSelect) {
-        // Check if already selected correctly
-        const currentValue = await circumscriptionSelect.evaluate((el: any) => el.value);
-        const currentText = await circumscriptionSelect.evaluate((el: any) => 
-          el.options[el.selectedIndex]?.text?.trim() || ''
-        );
-        
-        logger.debug({ currentValue, currentText, target: config.circumscription }, 'Current circumscription selection');
-        
-        // Only select if not already the correct value
-        if (currentText !== config.circumscription) {
-          const bestOption = await findBestSelectOption(circumscriptionSelect, config.circumscription);
-          if (bestOption) {
-            logger.info({ target: config.circumscription, found: bestOption }, 'Found best match for circumscription');
-            await circumscriptionSelect.selectOption({ value: bestOption.value });
-            
-            // Wait for form to reload after selection (the onchange submits the form)
-            await this.page.waitForLoadState('networkidle', { timeout: 30000 });
-            await this.page.waitForSelector('#selCadst', { state: 'visible', timeout: 10000 });
-          } else {
-            throw new Error(`Could not find matching option for circumscription: ${config.circumscription}`);
-          }
-        } else {
-          logger.info('Circumscription already correctly selected');
-        }
-      }
+      await safeSelectOption(this.page, '#selCircnFoncr', config.circumscription);
+      // Wait for cadastre dropdown to appear after selection
+      await this.page.waitForSelector('#selCadst', { state: 'visible', timeout: 10000 });
       
       // Select Cadastre with fuzzy matching
       logger.info('Selecting cadastre dropdown');
@@ -1223,18 +1249,12 @@ export class AIRegistreExtractor {
         // Only select if not already the correct value
         if (currentText !== config.cadastre) {
           // Special case for Cadastre du Québec
-          if (config.cadastre && (config.cadastre === 'Cadastre du Québec' || 
-              config.cadastre.toLowerCase().includes('quebec') || 
+          if (config.cadastre && (config.cadastre === 'Cadastre du Québec' ||
+              config.cadastre.toLowerCase().includes('quebec') ||
               config.cadastre.toLowerCase().includes('québec'))) {
-            await cadastreSelect.selectOption({ value: '000001' });
+            await safeSelectOption(this.page, '#selCadst', config.cadastre, { specialValue: '000001' });
           } else if (config.cadastre) {
-            const bestOption = await findBestSelectOption(cadastreSelect, config.cadastre);
-            if (bestOption) {
-              logger.info({ target: config.cadastre, found: bestOption }, 'Found best match for cadastre');
-              await cadastreSelect.selectOption({ value: bestOption.value });
-            } else {
-              throw new Error(`Could not find matching option for cadastre: ${config.cadastre}`);
-            }
+            await safeSelectOption(this.page, '#selCadst', config.cadastre);
           }
           
           // Wait for form to reload after selection
@@ -1246,14 +1266,10 @@ export class AIRegistreExtractor {
       
       // Fill lot number
       logger.info('Filling lot number');
-      const lotNumberInput = await this.page.$('#txtNumrtLot');
-      if (lotNumberInput) {
-        // Clear the field first
-        await lotNumberInput.fill('');
-        // Remove spaces from lot number as the form expects it without spaces
-        const lotNumberNoSpaces = config.lot_number?.replace(/\s+/g, '') || '';
-        await lotNumberInput.fill(lotNumberNoSpaces);
-      }
+      // Remove spaces from lot number as the form expects it without spaces
+      const lotNumberNoSpaces = config.lot_number?.replace(/\s+/g, '') || '';
+      await this.page.fill('#txtNumrtLot', '');
+      await this.page.fill('#txtNumrtLot', lotNumberNoSpaces);
       
       // Handle Désignation secondaire if provided
       if (config.designation_secondaire) {
@@ -1270,14 +1286,7 @@ export class AIRegistreExtractor {
           
           // Only select if not already the correct value and not empty
           if (currentText !== config.designation_secondaire && config.designation_secondaire.trim() !== '') {
-            const bestOption = await findBestSelectOption(designationSelect, config.designation_secondaire);
-            if (bestOption) {
-              logger.info({ target: config.designation_secondaire, found: bestOption }, 'Found best match for designation secondaire');
-              await designationSelect.selectOption({ value: bestOption.value });
-            } else {
-              logger.warn(`Could not find matching option for designation secondaire: ${config.designation_secondaire}`);
-              // Don't throw error for optional field, just log warning
-            }
+            await safeSelectOption(this.page, '#selDesgnSecnd', config.designation_secondaire, { waitForNavigation: false });
           } else {
             logger.info('Designation secondaire already correctly selected or empty');
           }
@@ -1401,29 +1410,12 @@ export class AIRegistreExtractor {
     try {
       logger.info('Using hybrid approach for Actes extraction');
       
-      // Wait for page to be ready
-      await this.page.waitForSelector('#selCircnFoncr', { state: 'visible', timeout: 10000 });
+      // Wait for page to be ready (increased timeout for slow loads)
+      await this.page.waitForSelector('#selCircnFoncr', { state: 'visible', timeout: 30000 });
       
       // Select Circonscription foncière with fuzzy matching
       logger.info('Selecting circumscription dropdown for actes');
-      const circumscriptionSelect = await this.page.$('#selCircnFoncr');
-      if (circumscriptionSelect) {
-        const currentText = await circumscriptionSelect.evaluate((el: any) => 
-          el.options[el.selectedIndex]?.text?.trim() || ''
-        );
-        
-        if (currentText !== config.circumscription) {
-          const bestOption = await findBestSelectOption(circumscriptionSelect, config.circumscription);
-          if (bestOption) {
-            logger.info({ target: config.circumscription, found: bestOption }, 'Found best match for circumscription');
-            await circumscriptionSelect.selectOption({ value: bestOption.value });
-          } else {
-            throw new Error(`Could not find matching option for circumscription: ${config.circumscription}`);
-          }
-        } else {
-          logger.info('Circumscription already correctly selected');
-        }
-      }
+      await safeSelectOption(this.page, '#selCircnFoncr', config.circumscription);
       
       // Select Type de document
       logger.info('Selecting type de document dropdown');
@@ -1452,11 +1444,8 @@ export class AIRegistreExtractor {
       
       // Fill Numéro d'inscription
       logger.info('Filling numero inscription');
-      const numeroInput = await this.page.$('#txtNoReqst');
-      if (numeroInput) {
-        await numeroInput.fill('');
-        await numeroInput.fill(config.numero_inscription);
-      }
+      await this.page.fill('#txtNoReqst', '');
+      await this.page.fill('#txtNoReqst', config.numero_inscription);
       
       // Find and click Rechercher button
       logger.info('Looking for Rechercher button');
@@ -1522,34 +1511,19 @@ export class AIRegistreExtractor {
     
     try {
       logger.info('Using hybrid approach for Plans Cadastraux extraction');
-      
-      // Wait for page to be ready
-      await this.page.waitForSelector('#selCircnFoncr', { state: 'visible', timeout: 10000 });
+
+      // CRITICAL: Navigate to plans cadastraux search page first
+      await this.navigateToSearch('plans_cadastraux', true);
+
+      // Wait for page to be ready after navigation (increased timeout for slow loads)
+      await this.page.waitForLoadState('networkidle', { timeout: 30000 });
+      await this.page.waitForSelector('#selCircnFoncr', { state: 'visible', timeout: 30000 });
       
       // Select Circonscription foncière
       logger.info('Selecting circumscription for plans cadastraux');
-      const circumscriptionSelect = await this.page.$('#selCircnFoncr');
-      if (circumscriptionSelect) {
-        const currentText = await circumscriptionSelect.evaluate((el: any) => 
-          el.options[el.selectedIndex]?.text?.trim() || ''
-        );
-        
-        if (currentText !== config.circumscription) {
-          const bestOption = await findBestSelectOption(circumscriptionSelect, config.circumscription);
-          if (bestOption) {
-            logger.info({ target: config.circumscription, found: bestOption }, 'Found best match for circumscription');
-            await circumscriptionSelect.selectOption({ value: bestOption.value });
-            
-            // Wait for form to reload
-            await this.page.waitForLoadState('networkidle', { timeout: 30000 });
-            await this.page.waitForSelector('#selCadst', { state: 'visible', timeout: 10000 });
-          } else {
-            throw new Error(`Could not find matching option for circumscription: ${config.circumscription}`);
-          }
-        } else {
-          logger.info('Circumscription already correctly selected');
-        }
-      }
+      await safeSelectOption(this.page, '#selCircnFoncr', config.circumscription);
+      // Wait for cadastre dropdown to appear after selection
+      await this.page.waitForSelector('#selCadst', { state: 'visible', timeout: 10000 });
       
       // Select Cadastre if provided
       if (config.cadastre) {
@@ -1561,31 +1535,22 @@ export class AIRegistreExtractor {
           );
           
           if (currentText !== config.cadastre) {
-            if (config.cadastre && (config.cadastre === 'Cadastre du Québec' || 
-                config.cadastre.toLowerCase().includes('quebec') || 
+            if (config.cadastre && (config.cadastre === 'Cadastre du Québec' ||
+                config.cadastre.toLowerCase().includes('quebec') ||
                 config.cadastre.toLowerCase().includes('québec'))) {
-              await cadastreSelect.selectOption({ value: '000001' });
+              await safeSelectOption(this.page, '#selCadst', config.cadastre, { specialValue: '000001' });
             } else {
-              const bestOption = await findBestSelectOption(cadastreSelect, config.cadastre);
-              if (bestOption) {
-                await cadastreSelect.selectOption({ value: bestOption.value });
-              }
+              await safeSelectOption(this.page, '#selCadst', config.cadastre);
             }
-            
-            // Wait for form to reload
-            await this.page.waitForLoadState('networkidle', { timeout: 30000 });
           }
         }
       }
       
       // Fill lot number
       logger.info('Filling lot number');
-      const lotNumberInput = await this.page.$('#txtNumrtLot');
-      if (lotNumberInput) {
-        await lotNumberInput.fill('');
-        const lotNumberNoSpaces = config.lot_number?.replace(/\s+/g, '') || '';
-        await lotNumberInput.fill(lotNumberNoSpaces);
-      }
+      const lotNumberNoSpaces = config.lot_number?.replace(/\s+/g, '') || '';
+      await this.page.fill('#txtNumrtLot', '');
+      await this.page.fill('#txtNumrtLot', lotNumberNoSpaces);
       
       // Handle Désignation secondaire if provided
       if (config.designation_secondaire) {
@@ -1593,12 +1558,9 @@ export class AIRegistreExtractor {
         const designationSelect = await this.page.$('#selDesgnSecnd');
         if (designationSelect) {
           const currentValue = await designationSelect.evaluate((el: any) => el.value);
-          
+
           if (currentValue !== config.designation_secondaire && config.designation_secondaire.trim() !== '') {
-            const bestOption = await findBestSelectOption(designationSelect, config.designation_secondaire);
-            if (bestOption) {
-              await designationSelect.selectOption({ value: bestOption.value });
-            }
+            await safeSelectOption(this.page, '#selDesgnSecnd', config.designation_secondaire, { waitForNavigation: false });
           }
         }
       }

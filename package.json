@@ -8,12 +8,15 @@
     "dev": "tsx watch src/worker/index.ts",
     "build": "tsc && cp src/api/dashboard.html dist/api/ && cp -r src/ocr/prompts dist/ocr/",
     "start": "node dist/worker/index.js",
+    "unified:dev": "tsx watch src/worker/unified-worker.ts",
+    "unified:start": "node dist/worker/unified-worker.js",
     "monitor:dev": "tsx watch src/monitor/index.ts",
     "monitor": "node dist/monitor/index.js",
     "api:dev": "tsx watch src/api/index.ts",
     "api:start": "node dist/api/index.js",
     "ocr:dev": "tsx watch src/ocr/start-ocr-workers.ts",
     "ocr:start": "node dist/ocr/start-ocr-workers.js",
+    "diagnose": "tsx src/scripts/diagnose-polling.ts",
     "typecheck": "tsc --noEmit"
   },
   "keywords": [

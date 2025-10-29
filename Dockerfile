@@ -49,22 +49,34 @@ RUN npm run build
 # Set environment
 ENV NODE_ENV=production
 
-# Create non-root user FIRST
+# Create non-root user
 RUN groupadd -r extractor && useradd -r -g extractor extractor
 
-# CRITICAL: Copy Playwright browsers from root cache to app directory
-# This ensures the non-root user can access them
+# CRITICAL FIX: Set browser path BEFORE copying to ensure consistency
+ENV PLAYWRIGHT_BROWSERS_PATH=/app/.cache/ms-playwright
+
+# Copy Playwright browsers from root cache to app directory with proper permissions
+# Use -L to follow symlinks and ensure all files are copied
 RUN mkdir -p /app/.cache && \
-    cp -r /root/.cache/ms-playwright /app/.cache/ && \
-    chown -R extractor:extractor /app
+    if [ -d /root/.cache/ms-playwright ]; then \
+      cp -rL /root/.cache/ms-playwright /app/.cache/ && \
+      chown -R extractor:extractor /app/.cache; \
+    else \
+      echo "WARNING: Playwright browsers not found in /root/.cache/ms-playwright" && \
+      ls -la /root/.cache/ || echo "No /root/.cache directory"; \
+    fi
+
+# Ensure app directory has correct permissions
+RUN chown -R extractor:extractor /app
 
 # Note: Downloads will use /tmp which is always writable by all users
 
-# Set Playwright to use the app cache directory
-ENV PLAYWRIGHT_BROWSERS_PATH=/app/.cache/ms-playwright
-
 # Switch to non-root user
 USER extractor
+
+# Verify browser installation (this will fail build if browsers aren't accessible)
+RUN npx playwright install --dry-run chromium || \
+    (echo "ERROR: Playwright browsers not accessible to non-root user" && exit 1)
 
 # Start worker
 CMD ["node", "dist/worker/index.js"]

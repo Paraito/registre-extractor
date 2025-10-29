@@ -512,8 +512,14 @@ export class ExtractionWorker {
         })
         .eq('id', job.id);
 
-      // Clean up local file
-      await fs.unlink(localFilePath);
+      // Clean up local file (check if exists first to avoid ENOENT errors)
+      try {
+        await fs.unlink(localFilePath);
+      } catch (unlinkError: any) {
+        if (unlinkError.code !== 'ENOENT') {
+          logger.warn({ error: unlinkError, localFilePath }, 'Failed to delete temp file (non-critical)');
+        }
+      }
 
       // Update worker stats
       this.workerStatus.jobs_completed++;
