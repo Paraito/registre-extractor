@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Registre Extractor - Professional Dashboard</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
         * {
@@ -452,113 +452,7 @@
     <div class="container">
         <div class="error-banner" id="error-banner"></div>
         
-        <!-- Key Metrics Overview -->
-        <div class="metrics-overview">
-            <div class="metric-card">
-                <div class="metric-header">
-                    <div>
-                        <div class="metric-title">Jobs en Attente</div>
-                        <div class="metric-value" id="metric-waiting">0</div>
-                        <div class="metric-change positive" id="waiting-change">
-                            <span>↑</span>
-                            <span>0 depuis 1h</span>
-                        </div>
-                    </div>
-                    <div class="metric-icon blue">📋</div>
-                </div>
-            </div>
-            
-            <div class="metric-card warning">
-                <div class="metric-header">
-                    <div>
-                        <div class="metric-title">Jobs en Traitement</div>
-                        <div class="metric-value" id="metric-processing">0</div>
-                        <div class="metric-change">
-                            <span id="processing-workers">0 workers actifs</span>
-                        </div>
-                    </div>
-                    <div class="metric-icon yellow">⚡</div>
-                </div>
-            </div>
-            
-            <div class="metric-card success">
-                <div class="metric-header">
-                    <div>
-                        <div class="metric-title">Jobs Terminés (24h)</div>
-                        <div class="metric-value" id="metric-completed">0</div>
-                        <div class="metric-change positive">
-                            <span>↑</span>
-                            <span id="completion-rate">0% taux de réussite</span>
-                        </div>
-                    </div>
-                    <div class="metric-icon green">✓</div>
-                </div>
-            </div>
-            
-            <div class="metric-card danger">
-                <div class="metric-header">
-                    <div>
-                        <div class="metric-title">Jobs en Erreur</div>
-                        <div class="metric-value" id="metric-failed">0</div>
-                        <div class="metric-change negative" id="error-trend">
-                            <span>↓</span>
-                            <span>0 cette heure</span>
-                        </div>
-                    </div>
-                    <div class="metric-icon red">⚠</div>
-                </div>
-            </div>
-            
-            <div class="metric-card">
-                <div class="metric-header">
-                    <div>
-                        <div class="metric-title">Workers Actifs</div>
-                        <div class="metric-value" id="metric-workers">0/0</div>
-                        <div class="metric-change">
-                            <span id="worker-efficiency">0% efficacité</span>
-                        </div>
-                    </div>
-                    <div class="metric-icon blue">🤖</div>
-                </div>
-            </div>
-            
-            <div class="metric-card">
-                <div class="metric-header">
-                    <div>
-                        <div class="metric-title">Temps Moyen</div>
-                        <div class="metric-value" id="metric-avg-time">0s</div>
-                        <div class="metric-change positive">
-                            <span>↓</span>
-                            <span>-5s vs hier</span>
-                        </div>
-                    </div>
-                    <div class="metric-icon green">⏱</div>
-                </div>
-            </div>
-        </div>
-        
-        <!-- Charts Section -->
-        <div class="main-grid">
-            <div class="chart-container">
-                <div class="chart-header">
-                    <h2 class="chart-title">Performance des Jobs</h2>
-                    <div class="chart-tabs">
-                        <button class="chart-tab active" onclick="updateJobChart('hourly')">Heure</button>
-                        <button class="chart-tab" onclick="updateJobChart('daily')">Jour</button>
-                        <button class="chart-tab" onclick="updateJobChart('weekly')">Semaine</button>
-                    </div>
-                </div>
-                <canvas id="jobChart" height="200"></canvas>
-            </div>
-            
-            <div class="chart-container">
-                <div class="chart-header">
-                    <h2 class="chart-title">Distribution des Types</h2>
-                </div>
-                <canvas id="typeChart" height="200"></canvas>
-            </div>
-        </div>
-        
+
         <!-- Workers Table -->
         <div class="table-container">
             <div class="table-header">
@@ -596,169 +490,39 @@
             </table>
         </div>
         
-        <!-- Jobs Table -->
+        <!-- Completed Tasks (Latest 50) -->
         <div class="table-container">
             <div class="table-header">
-                <h2 class="table-title">Jobs Récents</h2>
-                <div class="table-actions">
-                    <select class="search-box" id="status-filter" onchange="filterJobs()">
-                        <option value="">Tous les statuts</option>
-                        <option value="En attente">En attente</option>
-                        <option value="En traitement">En traitement</option>
-                        <option value="Terminé">Terminé</option>
-                        <option value="Erreur">Erreur</option>
-                    </select>
-                    <input type="text" class="search-box" placeholder="Rechercher..." id="job-search">
-                </div>
+                <h2 class="table-title">Opérations Complétées (50 dernières)</h2>
             </div>
             <table>
                 <thead>
                     <tr>
-                        <th>Job ID</th>
+                        <th>Task ID</th>
                         <th>Type</th>
-                        <th>Document</th>
-                        <th>Cadastre/Circ.</th>
+                        <th>Subtype</th>
+                        <th>Identifier</th>
                         <th>Status</th>
                         <th>Worker</th>
-                        <th>Durée</th>
                         <th>Créé</th>
-                        <th>Actions</th>
+                        <th>Erreur</th>
                     </tr>
                 </thead>
-                <tbody id="jobs-tbody">
+                <tbody id="tasks-tbody">
                     <tr>
-                        <td colspan="9" class="empty-state">
+                        <td colspan="8" class="empty-state">
                             <div class="loading-spinner"></div>
-                            <p>Chargement des jobs...</p>
+                            <p>Chargement des tâches...</p>
                         </td>
                     </tr>
                 </tbody>
             </table>
-        </div>
-        
-        <!-- System Statistics -->
-        <div class="chart-container">
-            <h2 class="chart-title">Statistiques Système</h2>
-            <div class="stat-grid" id="system-stats">
-                <div class="stat-item">
-                    <div class="stat-label">Total Jobs (30j)</div>
-                    <div class="stat-value" id="stat-total-jobs">0</div>
-                </div>
-                <div class="stat-item">
-                    <div class="stat-label">Taux de Succès Global</div>
-                    <div class="stat-value" id="stat-success-rate">0%</div>
-                </div>
-                <div class="stat-item">
-                    <div class="stat-label">Jobs par Heure</div>
-                    <div class="stat-value" id="stat-jobs-per-hour">0</div>
-                </div>
-                <div class="stat-item">
-                    <div class="stat-label">Temps Moyen (médiane)</div>
-                    <div class="stat-value" id="stat-median-time">0s</div>
-                </div>
-                <div class="stat-item">
-                    <div class="stat-label">Workers Efficaces</div>
-                    <div class="stat-value" id="stat-efficient-workers">0/0</div>
-                </div>
-                <div class="stat-item">
-                    <div class="stat-label">Accounts Actifs</div>
-                    <div class="stat-value" id="stat-active-accounts">0/0</div>
-                </div>
-            </div>
         </div>
     </div>
     
     <script>
         const API_BASE_URL = window.location.origin;
         let updateInterval;
-        let jobChart, typeChart;
-        let lastMetrics = {};
-        let jobHistory = [];
-        
-        // Initialize Charts
-        function initCharts() {
-            const chartOptions = {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: {
-                    legend: {
-                        labels: {
-                            color: '#94a3b8',
-                            font: { size: 12 }
-                        }
-                    }
-                },
-                scales: {
-                    x: {
-                        grid: { color: 'rgba(148, 163, 184, 0.1)' },
-                        ticks: { color: '#94a3b8' }
-                    },
-                    y: {
-                        grid: { color: 'rgba(148, 163, 184, 0.1)' },
-                        ticks: { color: '#94a3b8' }
-                    }
-                }
-            };
-            
-            // Job Performance Chart
-            const jobCtx = document.getElementById('jobChart').getContext('2d');
-            jobChart = new Chart(jobCtx, {
-                type: 'line',
-                data: {
-                    labels: [],
-                    datasets: [
-                        {
-                            label: 'Complétés',
-                            data: [],
-                            borderColor: '#10b981',
-                            backgroundColor: 'rgba(16, 185, 129, 0.1)',
-                            tension: 0.4
-                        },
-                        {
-                            label: 'En Erreur',
-                            data: [],
-                            borderColor: '#ef4444',
-                            backgroundColor: 'rgba(239, 68, 68, 0.1)',
-                            tension: 0.4
-                        }
-                    ]
-                },
-                options: chartOptions
-            });
-            
-            // Type Distribution Chart
-            const typeCtx = document.getElementById('typeChart').getContext('2d');
-            typeChart = new Chart(typeCtx, {
-                type: 'doughnut',
-                data: {
-                    labels: ['Index', 'Acte', 'Plan Cadastraux'],
-                    datasets: [{
-                        data: [0, 0, 0],
-                        backgroundColor: [
-                            'rgba(59, 130, 246, 0.8)',
-                            'rgba(16, 185, 129, 0.8)',
-                            'rgba(245, 158, 11, 0.8)'
-                        ],
-                        borderColor: '#1e293b',
-                        borderWidth: 2
-                    }]
-                },
-                options: {
-                    ...chartOptions,
-                    plugins: {
-                        ...chartOptions.plugins,
-                        legend: {
-                            position: 'bottom',
-                            labels: {
-                                color: '#94a3b8',
-                                padding: 20,
-                                font: { size: 12 }
-                            }
-                        }
-                    }
-                }
-            });
-        }
         
         function showError(message) {
             const banner = document.getElementById('error-banner');
@@ -783,120 +547,7 @@
             return formatDuration(diff);
         }
         
-        async function fetchMetrics() {
-            try {
-                const response = await fetch(`${API_BASE_URL}/api/metrics`);
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                const data = await response.json();
-                
-                // Update main metrics
-                document.getElementById('metric-waiting').textContent = data.queue?.waiting || 0;
-                document.getElementById('metric-processing').textContent = data.queue?.active || 0;
-                document.getElementById('metric-failed').textContent = data.queue?.failed || 0;
-                
-                // Workers metric
-                const activeWorkers = data.workers?.active || 0;
-                const totalWorkers = data.workers?.total || 0;
-                document.getElementById('metric-workers').textContent = `${activeWorkers}/${totalWorkers}`;
-                document.getElementById('processing-workers').textContent = `${activeWorkers} workers actifs`;
-                
-                // Calculate efficiency
-                const efficiency = totalWorkers > 0 ? Math.round((activeWorkers / totalWorkers) * 100) : 0;
-                document.getElementById('worker-efficiency').textContent = `${efficiency}% efficacité`;
-                
-                // Store for comparison
-                lastMetrics = data;
-                
-                // Fetch additional stats
-                await fetchDetailedStats();
-                
-            } catch (error) {
-                console.error('Failed to fetch metrics:', error);
-            }
-        }
-        
-        async function fetchDetailedStats() {
-            try {
-                // Get completed jobs in last 24h
-                const response = await fetch(`${API_BASE_URL}/api/extractions?status=completed&limit=1000`);
-                if (!response.ok) return;
-                
-                const data = await response.json();
-                const jobs = data.jobs || [];
-                
-                // Filter jobs from last 24h
-                const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
-                const recentJobs = jobs.filter(job => new Date(job.created_at) > oneDayAgo);
-                
-                document.getElementById('metric-completed').textContent = recentJobs.length;
-                
-                // Calculate completion rate
-                const totalJobs = recentJobs.length + (lastMetrics.queue?.failed || 0);
-                const rate = totalJobs > 0 ? Math.round((recentJobs.length / totalJobs) * 100) : 0;
-                document.getElementById('completion-rate').textContent = `${rate}% taux de réussite`;
-                
-                // Update job history for charts
-                updateJobHistory(jobs);
-                
-            } catch (error) {
-                console.error('Failed to fetch detailed stats:', error);
-            }
-        }
-        
-        function updateJobHistory(jobs) {
-            // Group jobs by hour for the chart
-            const hourlyData = {};
-            const now = new Date();
-            
-            // Initialize last 24 hours
-            for (let i = 0; i < 24; i++) {
-                const hour = new Date(now - i * 60 * 60 * 1000);
-                const key = hour.toISOString().substring(0, 13);
-                hourlyData[key] = { completed: 0, failed: 0 };
-            }
-            
-            // Count jobs
-            jobs.forEach(job => {
-                const hour = job.created_at.substring(0, 13);
-                if (hourlyData[hour]) {
-                    if (job.status === 'Terminé') {
-                        hourlyData[hour].completed++;
-                    } else if (job.status === 'Erreur') {
-                        hourlyData[hour].failed++;
-                    }
-                }
-            });
-            
-            // Update chart
-            const labels = Object.keys(hourlyData).reverse().map(h => {
-                const date = new Date(h + ':00:00');
-                return date.getHours() + 'h';
-            });
-            
-            const completed = Object.values(hourlyData).reverse().map(d => d.completed);
-            const failed = Object.values(hourlyData).reverse().map(d => d.failed);
-            
-            jobChart.data.labels = labels;
-            jobChart.data.datasets[0].data = completed;
-            jobChart.data.datasets[1].data = failed;
-            jobChart.update();
-            
-            // Update type distribution
-            const typeCount = { index: 0, acte: 0, plan_cadastraux: 0 };
-            jobs.forEach(job => {
-                if (job.document_source) {
-                    typeCount[job.document_source] = (typeCount[job.document_source] || 0) + 1;
-                }
-            });
-            
-            typeChart.data.datasets[0].data = [
-                typeCount.index || 0,
-                typeCount.acte || 0,
-                typeCount.plan_cadastraux || 0
-            ];
-            typeChart.update();
-        }
-        
+
         async function fetchWorkers() {
             try {
                 const response = await fetch(`${API_BASE_URL}/api/workers`);
@@ -946,10 +597,7 @@
                         </td>
                     `;
                 });
-                
-                // Update system stats
-                updateSystemStats(data.workers);
-                
+
             } catch (error) {
                 console.error('Failed to fetch workers:', error);
                 document.getElementById('workers-tbody').innerHTML = 
@@ -957,106 +605,54 @@
             }
         }
         
-        function updateSystemStats(workers) {
-            const activeWorkers = workers.filter(w => w.status === 'busy' || w.status === 'idle').length;
-            const efficientWorkers = workers.filter(w => {
-                const rate = w.jobs_completed > 0 
-                    ? (w.jobs_completed / (w.jobs_completed + w.jobs_failed))
-                    : 0;
-                return rate > 0.8; // 80% success rate
-            }).length;
-            
-            document.getElementById('stat-efficient-workers').textContent = 
-                `${efficientWorkers}/${workers.length}`;
-        }
-        
+
         async function fetchJobs() {
             try {
-                const statusFilter = document.getElementById('status-filter').value;
-                const searchTerm = document.getElementById('job-search').value.toLowerCase();
-                
-                let url = `${API_BASE_URL}/api/extractions?limit=50`;
-                if (statusFilter) {
-                    url = `${API_BASE_URL}/api/extractions?status=${encodeURIComponent(statusFilter)}&limit=50`;
-                }
-                
+                const url = `${API_BASE_URL}/api/tasks?limit=50`;
+
                 const response = await fetch(url);
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 const data = await response.json();
-                
-                const tbody = document.getElementById('jobs-tbody');
+
+                const tbody = document.getElementById('tasks-tbody');
                 tbody.innerHTML = '';
-                
-                let jobs = data.jobs || [];
-                
-                // Apply search filter
-                if (searchTerm) {
-                    jobs = jobs.filter(job => 
-                        job.extraction_id.toLowerCase().includes(searchTerm) ||
-                        job.document_number.toLowerCase().includes(searchTerm) ||
-                        (job.cadastre && job.cadastre.toLowerCase().includes(searchTerm))
-                    );
-                }
-                
-                if (jobs.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="9" class="empty-state">Aucun job trouvé</td></tr>';
+
+                // Filter only completed tasks
+                let tasks = (data.tasks || []).filter(task =>
+                    task.status.includes('Complété') || task.status === 'Terminé'
+                );
+
+                if (tasks.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="8" class="empty-state">Aucune tâche trouvée</td></tr>';
                     return;
                 }
                 
-                jobs.forEach(job => {
+                tasks.forEach(task => {
                     const row = tbody.insertRow();
-                    const shortId = job.extraction_id.substring(0, 8);
-                    const workerId = job.worker_id ? job.worker_id.substring(0, 8) + '...' : '-';
-                    const createdAt = new Date(job.created_at);
-                    const processingTime = job.processing_started_at && job.status === 'Terminé'
-                        ? Math.round((new Date(job.updated_at) - new Date(job.processing_started_at)) / 1000)
-                        : null;
-                    
+                    const shortId = task.id.substring(0, 8);
+                    const workerId = task.worker_id ? task.worker_id.substring(0, 8) + '...' : '-';
+                    const createdAt = new Date(task.created_at);
+
+                    // Type badge color
+                    const typeColor = task.type === 'Extraction' ? 'primary' :
+                                     task.type === 'REQ' ? 'warning' : 'success';
+
                     row.innerHTML = `
-                        <td class="worker-id" title="${job.extraction_id}">${shortId}...</td>
-                        <td>${job.document_source}</td>
-                        <td>${job.document_number}</td>
-                        <td>${job.cadastre || job.circonscription_fonciere || '-'}</td>
-                        <td><span class="status-badge status-${job.status.replace(' ', '.')}">${job.status}</span></td>
-                        <td class="worker-id" title="${job.worker_id || ''}">${workerId}</td>
-                        <td>${processingTime ? formatDuration(processingTime) : '-'}</td>
+                        <td class="worker-id" title="${task.id}">${shortId}...</td>
+                        <td><span class="status-badge status-${typeColor}">${task.type}</span></td>
+                        <td>${task.subtype}</td>
+                        <td>${task.identifier}</td>
+                        <td><span class="status-badge status-${task.status.replace(' ', '.')}">${task.status}</span></td>
+                        <td class="worker-id" title="${task.worker_id || ''}">${workerId}</td>
                         <td>${createdAt.toLocaleString()}</td>
-                        <td>
-                            ${job.status === 'Erreur' ? 
-                                `<button class="action-button" onclick="retryJob('${job.extraction_id}')">
-                                    Réessayer
-                                </button>` : 
-                                job.status === 'Terminé' && job.supabase_path ?
-                                `<button class="action-button" onclick="downloadJob('${job.extraction_id}')">
-                                    Télécharger
-                                </button>` : '-'
-                            }
-                        </td>
+                        <td>${task.error_message ? `<span title="${task.error_message}">${task.error_message.substring(0, 50)}...</span>` : '-'}</td>
                     `;
                 });
-                
-                // Calculate average processing time
-                const completedJobs = jobs.filter(j => j.status === 'Terminé' && j.processing_started_at);
-                if (completedJobs.length > 0) {
-                    const times = completedJobs.map(j => 
-                        (new Date(j.updated_at) - new Date(j.processing_started_at)) / 1000
-                    );
-                    const avgTime = times.reduce((a, b) => a + b, 0) / times.length;
-                    document.getElementById('metric-avg-time').textContent = formatDuration(avgTime);
-                    
-                    // Median time
-                    times.sort((a, b) => a - b);
-                    const median = times[Math.floor(times.length / 2)];
-                    document.getElementById('stat-median-time').textContent = formatDuration(median);
-                }
-                
-                // Update total jobs stat
-                document.getElementById('stat-total-jobs').textContent = data.total || jobs.length;
-                
+
             } catch (error) {
-                console.error('Failed to fetch jobs:', error);
-                document.getElementById('jobs-tbody').innerHTML = 
-                    '<tr><td colspan="9" class="empty-state">Erreur de chargement des jobs</td></tr>';
+                console.error('Failed to fetch tasks:', error);
+                document.getElementById('tasks-tbody').innerHTML =
+                    '<tr><td colspan="8" class="empty-state">Erreur de chargement des tâches</td></tr>';
             }
         }
         
@@ -1084,62 +680,41 @@
             }
         }
         
-        function filterJobs() {
-            fetchJobs();
-        }
-        
         async function refreshWorkers() {
             const btn = event.target;
             btn.disabled = true;
             btn.innerHTML = '<span class="loading-spinner"></span>';
-            
+
             await fetchWorkers();
-            
+
             btn.disabled = false;
             btn.textContent = 'Rafraîchir';
         }
         
-        function updateJobChart(period) {
-            // Update active tab
-            document.querySelectorAll('.chart-tab').forEach(tab => {
-                tab.classList.remove('active');
-            });
-            event.target.classList.add('active');
-            
-            // TODO: Implement different time periods
-            showError('Changement de période non implémenté');
-        }
-        
         async function updateDashboard() {
             await Promise.all([
-                fetchMetrics(),
                 fetchWorkers(),
                 fetchJobs()
             ]);
-            
-            document.getElementById('last-update-time').textContent = 
+
+            document.getElementById('last-update-time').textContent =
                 new Date().toLocaleTimeString();
         }
-        
-        // Search functionality
-        document.getElementById('job-search').addEventListener('input', (e) => {
-            fetchJobs();
-        });
-        
+
+        // Search functionality for workers
         document.getElementById('worker-search').addEventListener('input', (e) => {
             const searchTerm = e.target.value.toLowerCase();
             const rows = document.querySelectorAll('#workers-tbody tr');
-            
+
             rows.forEach(row => {
                 const text = row.textContent.toLowerCase();
                 row.style.display = text.includes(searchTerm) ? '' : 'none';
             });
         });
-        
+
         // Initialize
-        initCharts();
         updateDashboard();
-        
+
         // Auto-refresh every 3 seconds
         updateInterval = setInterval(updateDashboard, 3000);
         

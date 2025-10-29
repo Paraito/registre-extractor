@@ -216,7 +216,7 @@ export class ExtractionWorker {
       } catch (error) {
         logger.error({ error, workerId: this.workerId }, 'Heartbeat failed');
       }
-    }, 10000); // Every 10 seconds
+    }, 30000); // Every 30 seconds (standardized across all worker types)
   }
 
   private async getAvailableAccount(): Promise<WorkerAccount> {

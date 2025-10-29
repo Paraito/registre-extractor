@@ -250,6 +250,247 @@ app.get('/api/workers', async (_req: Request, res: Response, next: NextFunction)
   }
 });
 
+// Get all tasks (extraction, REQ, RDPRM) - unified view
+app.get('/api/tasks', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const limit = parseInt(req.query.limit as string) || 50;
+
+    // Fetch from all three tables in parallel
+    const [extractionJobs, reqSessions, rdprmSearches] = await Promise.all([
+      // Extraction jobs
+      (async () => {
+        const { data, error } = await supabase
+          .from('extraction_queue')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .limit(limit);
+
+        if (error) throw error;
+        return (data || []).map((job: any) => ({
+          id: job.id,
+          type: 'Extraction',
+          subtype: job.document_source,
+          identifier: job.document_number,
+          status: getStatusName(job.status_id),
+          status_id: job.status_id,
+          worker_id: job.worker_id,
+          error_message: job.error_message,
+          created_at: job.created_at,
+          processing_started_at: job.processing_started_at,
+        }));
+      })(),
+
+      // REQ sessions
+      (async () => {
+        const { data, error } = await supabase
+          .from('search_sessions')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .limit(limit);
+
+        if (error) throw error;
+        return (data || []).map((session: any) => ({
+          id: session.id,
+          type: 'REQ',
+          subtype: 'Business Registry',
+          identifier: session.initial_search_query,
+          status: session.status === 'completed' ? 'Complété' :
+                  session.status === 'processing' ? 'En traitement' :
+                  session.status === 'failed' ? 'Erreur' : 'En attente',
+          status_id: session.status === 'completed' ? 3 :
+                     session.status === 'processing' ? 2 :
+                     session.status === 'failed' ? 4 : 1,
+          worker_id: null,
+          error_message: session.error_message,
+          created_at: session.created_at,
+          processing_started_at: null,
+        }));
+      })(),
+
+      // RDPRM searches
+      (async () => {
+        const { data, error } = await supabase
+          .from('rdprm_searches')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .limit(limit);
+
+        if (error) throw error;
+        return (data || []).map((search: any) => ({
+          id: search.id,
+          type: 'RDPRM',
+          subtype: 'Personal/Movable Rights',
+          identifier: search.search_name,
+          status: search.status === 'completed' ? 'Complété' :
+                  search.status === 'processing' ? 'En traitement' :
+                  search.status === 'failed' ? 'Erreur' : 'En attente',
+          status_id: search.status === 'completed' ? 3 :
+                     search.status === 'processing' ? 2 :
+                     search.status === 'failed' ? 4 : 1,
+          worker_id: null,
+          error_message: search.error_message,
+          created_at: search.created_at,
+          processing_started_at: null,
+        }));
+      })(),
+    ]);
+
+    // Combine and sort all tasks by created_at
+    const allTasks = [...extractionJobs, ...reqSessions, ...rdprmSearches]
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+      .slice(0, limit);
+
+    res.json({
+      tasks: allTasks,
+      total: allTasks.length,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Helper function to get status name from status_id
+function getStatusName(statusId: number): string {
+  const statusMap: { [key: number]: string } = {
+    1: 'En attente',
+    2: 'En traitement',
+    3: 'Complété',
+    4: 'Erreur',
+    5: 'Extraction Complété',
+    6: 'OCR en traitement',
+  };
+  return statusMap[statusId] || 'Inconnu';
+}
+
+// Server-Sent Events endpoint for real-time updates
+app.get('/api/stream', async (req: Request, res: Response) => {
+  // Set headers for SSE
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+
+  // Send initial data
+  const sendUpdate = async () => {
+    try {
+      // Fetch workers
+      const { data: workers, error: workersError } = await supabase
+        .from('worker_status')
+        .select('*')
+        .order('last_heartbeat', { ascending: false });
+
+      if (workersError) throw workersError;
+
+      // Fetch tasks from all three tables
+      const [extractionJobs, reqSessions, rdprmSearches] = await Promise.all([
+        // Extraction jobs
+        (async () => {
+          const { data, error } = await supabase
+            .from('extraction_queue')
+            .select('*')
+            .order('created_at', { ascending: false })
+            .limit(50);
+
+          if (error) throw error;
+          return (data || []).map((job: any) => ({
+            id: job.id,
+            type: 'Extraction',
+            subtype: job.document_source,
+            identifier: job.document_number,
+            status: getStatusName(job.status_id),
+            status_id: job.status_id,
+            worker_id: job.worker_id,
+            error_message: job.error_message,
+            created_at: job.created_at,
+            processing_started_at: job.processing_started_at,
+          }));
+        })(),
+
+        // REQ sessions
+        (async () => {
+          const { data, error } = await supabase
+            .from('search_sessions')
+            .select('*')
+            .order('created_at', { ascending: false })
+            .limit(50);
+
+          if (error) throw error;
+          return (data || []).map((session: any) => ({
+            id: session.id,
+            type: 'REQ',
+            subtype: 'Business Registry',
+            identifier: session.initial_search_query,
+            status: session.status === 'completed' ? 'Complété' :
+                    session.status === 'processing' ? 'En traitement' :
+                    session.status === 'failed' ? 'Erreur' : 'En attente',
+            status_id: session.status === 'completed' ? 3 :
+                       session.status === 'processing' ? 2 :
+                       session.status === 'failed' ? 4 : 1,
+            worker_id: null,
+            error_message: session.error_message,
+            created_at: session.created_at,
+            processing_started_at: null,
+          }));
+        })(),
+
+        // RDPRM searches
+        (async () => {
+          const { data, error } = await supabase
+            .from('rdprm_searches')
+            .select('*')
+            .order('created_at', { ascending: false })
+            .limit(50);
+
+          if (error) throw error;
+          return (data || []).map((search: any) => ({
+            id: search.id,
+            type: 'RDPRM',
+            subtype: 'Personal/Movable Rights',
+            identifier: search.search_name,
+            status: search.status === 'completed' ? 'Complété' :
+                    search.status === 'processing' ? 'En traitement' :
+                    search.status === 'failed' ? 'Erreur' : 'En attente',
+            status_id: search.status === 'completed' ? 3 :
+                       search.status === 'processing' ? 2 :
+                       search.status === 'failed' ? 4 : 1,
+            worker_id: null,
+            error_message: search.error_message,
+            created_at: search.created_at,
+            processing_started_at: null,
+          }));
+        })(),
+      ]);
+
+      // Combine and sort all tasks
+      const allTasks = [...extractionJobs, ...reqSessions, ...rdprmSearches]
+        .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+        .slice(0, 50);
+
+      const data = {
+        workers: workers || [],
+        tasks: allTasks,
+        timestamp: new Date().toISOString(),
+      };
+
+      res.write(`data: ${JSON.stringify(data)}\n\n`);
+    } catch (error) {
+      logger.error({ error }, 'Error sending SSE update');
+    }
+  };
+
+  // Send initial update
+  sendUpdate();
+
+  // Send updates every 2 seconds
+  const interval = setInterval(sendUpdate, 2000);
+
+  // Clean up on client disconnect
+  req.on('close', () => {
+    clearInterval(interval);
+    res.end();
+  });
+});
+
 // Apply error handler
 app.use(errorHandler);
 

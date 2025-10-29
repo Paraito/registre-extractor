@@ -1,4 +1,4 @@
-import { supabaseManager } from '../utils/supabase';
+import { supabaseManager, supabase } from '../utils/supabase';
 import { EXTRACTION_STATUS } from '../types';
 import { logger } from '../utils/logger';
 
@@ -22,7 +22,7 @@ export class HealthMonitor {
   constructor(
     checkIntervalMs: number = 30000, // Check every 30 seconds
     staleJobThresholdMs: number = 3 * 60 * 1000, // 3 minutes for stuck jobs
-    deadWorkerThresholdMs: number = 2 * 60 * 1000 // 2 minutes for dead workers
+    deadWorkerThresholdMs: number = 3 * 60 * 1000 // 3 minutes for dead workers (increased from 2 to match heartbeat interval)
   ) {
     this.checkIntervalMs = checkIntervalMs;
     this.staleJobThresholdMs = staleJobThresholdMs;
@@ -141,35 +141,39 @@ export class HealthMonitor {
 
   /**
    * Cleanup workers that haven't sent heartbeat
+   * FIXED: Only check default environment for worker_status since workers register there
    */
   private async cleanupDeadWorkers(): Promise<void> {
     try {
-      const environments = supabaseManager.getAvailableEnvironments();
+      // ONLY check default environment for worker status
+      // Workers register in default env, so we should only check there
       const deadThreshold = new Date(Date.now() - this.deadWorkerThresholdMs).toISOString();
       let totalCleaned = 0;
 
-      for (const env of environments) {
-        const client = supabaseManager.getServiceClient(env);
-        if (!client) continue;
+      // Use default supabase client instead of iterating all environments
+      const { data: deadWorkers, error: queryError } = await supabase
+        .from('worker_status')
+        .select('worker_id, last_heartbeat, current_job_id')
+        .lt('last_heartbeat', deadThreshold);
 
-        // Find dead workers
-        const { data: deadWorkers, error: queryError } = await client
-          .from('worker_status')
-          .select('worker_id, last_heartbeat, current_job_id')
-          .lt('last_heartbeat', deadThreshold);
+      if (queryError) {
+        logger.error({ error: queryError }, 'Error querying dead workers');
+        return;
+      }
 
-        if (queryError) {
-          logger.error({ error: queryError, environment: env }, 'Error querying dead workers');
-          continue;
-        }
+      if (!deadWorkers || deadWorkers.length === 0) {
+        return;
+      }
 
-        if (!deadWorkers || deadWorkers.length === 0) {
-          continue;
-        }
+      // Release any jobs held by dead workers (check ALL environments for jobs)
+      const environments = supabaseManager.getAvailableEnvironments();
+      for (const worker of deadWorkers) {
+        if (worker.current_job_id) {
+          // Find which environment has this job
+          for (const env of environments) {
+            const client = supabaseManager.getServiceClient(env);
+            if (!client) continue;
 
-        // Release any jobs held by dead workers
-        for (const worker of deadWorkers) {
-          if (worker.current_job_id) {
             await client
               .from('extraction_queue')
               .update({
@@ -182,28 +186,27 @@ export class HealthMonitor {
               .eq('worker_id', worker.worker_id);
           }
         }
-
-        // Mark workers as offline
-        const { error: updateError } = await client
-          .from('worker_status')
-          .update({ status: 'offline' })
-          .lt('last_heartbeat', deadThreshold);
-
-        if (updateError) {
-          logger.error({ error: updateError, environment: env }, 'Error updating dead workers');
-          continue;
-        }
-
-        totalCleaned += deadWorkers.length;
-        
-        logger.warn({ 
-          environment: env,
-          count: deadWorkers.length,
-          workers: deadWorkers.map(w => w.worker_id.substring(0, 8))
-        }, '💀 Cleaned up dead workers');
       }
 
+      // Mark workers as offline in default environment
+      const { error: updateError } = await supabase
+        .from('worker_status')
+        .update({ status: 'offline' })
+        .lt('last_heartbeat', deadThreshold);
+
+      if (updateError) {
+        logger.error({ error: updateError }, 'Error updating dead workers');
+        return;
+      }
+
+      totalCleaned = deadWorkers.length;
+
       if (totalCleaned > 0) {
+        logger.warn({
+          count: totalCleaned,
+          workers: deadWorkers.map(w => w.worker_id.substring(0, 8))
+        }, '💀 Cleaned up dead workers');
+
         logger.info({ totalCleaned }, '✅ Dead workers cleanup completed');
       }
     } catch (error) {

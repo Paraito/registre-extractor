@@ -10,6 +10,8 @@ import { VisionAnalyzer, PatternBasedAnalyzer } from '../utils/vision-analyzer';
 import { SmartElementFinder } from '../utils/smart-element-finder';
 import { extractSelectOptions, SelectOption } from '../utils/fuzzy-matcher';
 import { IndexFallbackHandler } from './extractor-index-fallback';
+import { ActeFallbackHandler } from './extractor-acte-fallback';
+import { PlanCadastrauxFallbackHandler } from './extractor-plan-cadastraux-fallback';
 
 /**
  * Helper function to safely select an option from a dropdown
@@ -1490,12 +1492,66 @@ export class AIRegistreExtractor {
       // Wait for document load and download - same as index
       return await this.waitForDocumentAndDownload(config);
     } catch (error) {
-      logger.error({ 
+      logger.error({
         error: error instanceof Error ? error.message : error,
         workerId: this.workerId,
-        config 
+        config
       }, 'Actes extraction failed');
-      
+
+      // Check if this is an error that should trigger the acte_type fallback
+      const errorMessage = error instanceof Error ? error.message : String(error);
+
+      // Trigger fallback for validation errors (document not found)
+      const shouldTriggerFallback = (
+        error instanceof DataValidationError ||
+        errorMessage.includes('Aucune information') ||
+        errorMessage.includes('inexistante') ||
+        errorMessage.includes('Document not found') ||
+        errorMessage.includes('validation error')
+      );
+
+      if (shouldTriggerFallback) {
+        logger.info({
+          error: errorMessage,
+          config,
+          originalActeType: config.type_document
+        }, '⚠️ Document not found with current acte_type, starting fallback to try other types');
+
+        // Use the acte fallback handler
+        const fallbackHandler = new ActeFallbackHandler(
+          this.page!,
+          config
+        );
+
+        try {
+          await fallbackHandler.executeWithRetries();
+
+          // If we get here, fallback succeeded!
+          logger.info({
+            workerId: this.workerId,
+            config,
+            newActeType: config.type_document
+          }, '✅ Acte fallback successful, proceeding with document download');
+
+          // Handle document selection if similar documents are found
+          await this.handleActeDocumentSelection();
+
+          // Continue with document download
+          return await this.waitForDocumentAndDownload(config);
+
+        } catch (fallbackError) {
+          // Fallback failed after all attempts - throw the detailed error
+          logger.error({
+            error: fallbackError instanceof Error ? fallbackError.message : fallbackError,
+            workerId: this.workerId,
+            config
+          }, '❌ Acte fallback failed after trying all acte_types');
+
+          throw fallbackError;
+        }
+      }
+
+      // For other errors, just throw
       throw error;
     }
   }
@@ -1599,12 +1655,67 @@ export class AIRegistreExtractor {
       // Wait for document load and download - same as index
       return await this.waitForDocumentAndDownload(config);
     } catch (error) {
-      logger.error({ 
+      logger.error({
         error: error instanceof Error ? error.message : error,
         workerId: this.workerId,
-        config 
+        config
       }, 'Plans Cadastraux extraction failed');
-      
+
+      // Check if this is an error that should trigger the fallback
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const isDataValidationError = error instanceof DataValidationError;
+
+      logger.info({
+        errorMessage,
+        isDataValidationError,
+        errorType: error?.constructor?.name
+      }, '🔍 DEBUG: Checking if error should trigger fallback');
+
+      const shouldTriggerFallback = (
+        error instanceof DataValidationError ||
+        errorMessage.includes('inexistante') ||
+        errorMessage.includes('Aucune information') ||
+        errorMessage.includes('validation error') ||
+        errorMessage.includes('not found') ||
+        errorMessage.includes('No matching')
+      );
+
+      logger.info({
+        shouldTriggerFallback
+      }, '🔍 DEBUG: Fallback decision');
+
+      if (shouldTriggerFallback) {
+        logger.info({
+          error: errorMessage,
+          config
+        }, '⚠️ Plan cadastraux error detected, starting intelligent fallback');
+
+        try {
+          // Use the fallback handler
+          const fallbackHandler = new PlanCadastrauxFallbackHandler(
+            this.page!,
+            config,
+            process.env.OPENAI_API_KEY
+          );
+
+          await fallbackHandler.executeWithRetries();
+
+          // After successful fallback, handle intermediate steps and download
+          await this.handlePlansCadastrauxIntermediateSteps();
+          await this.checkAndSelectLatestRadioOption();
+          return await this.waitForDocumentAndDownload(config);
+
+        } catch (fallbackError) {
+          logger.error({
+            error: fallbackError instanceof Error ? fallbackError.message : fallbackError,
+            workerId: this.workerId,
+            config
+          }, '❌ Plan cadastraux fallback failed after trying all combinations');
+
+          throw fallbackError;
+        }
+      }
+
       throw error;
     }
   }
@@ -1854,6 +1965,51 @@ export class AIRegistreExtractor {
     await this.takeDebugScreenshot('plans-cadastraux-final-page-before-document-wait');
   }
 
+  /**
+   * Handle the confirmation page that appears for large files
+   * URL: https://www.registrefoncier.gouv.qc.ca/Sirf/Script/13_01_13/pf_13_01_13_confr_demnd.asp
+   */
+  private async handleConfirmationPageIfPresent(): Promise<void> {
+    if (!this.page) throw new Error('Page not initialized');
+
+    // Wait a moment for page to settle
+    await this.page.waitForTimeout(2000);
+
+    const currentUrl = this.page.url();
+    logger.debug({ currentUrl }, 'Checking for confirmation page');
+
+    // Check if we're on the confirmation page
+    if (currentUrl.includes('pf_13_01_13_confr_demnd.asp')) {
+      logger.info('📋 Confirmation page detected for large file download');
+      await this.takeDebugScreenshot('confirmation-page-detected');
+
+      try {
+        // Look for the "Confirmer" button
+        const confirmerButton = await this.page.$('input[value="Confirmer"], button:has-text("Confirmer")');
+
+        if (confirmerButton) {
+          logger.info('Clicking Confirmer button for large file download');
+          await confirmerButton.click();
+
+          // Wait for navigation after clicking Confirmer
+          await this.page.waitForLoadState('networkidle', { timeout: 60000 }); // Extended timeout for large files
+
+          logger.info('✅ Confirmation accepted, proceeding with download');
+          await this.takeDebugScreenshot('after-confirmation');
+        } else {
+          logger.warn('Confirmation page detected but Confirmer button not found');
+          await this.takeDebugScreenshot('confirmation-button-not-found');
+        }
+      } catch (error) {
+        logger.error({ error: error instanceof Error ? error.message : error }, 'Error handling confirmation page');
+        await this.takeDebugScreenshot('confirmation-page-error');
+        throw new Error(`Failed to handle confirmation page: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      }
+    } else {
+      logger.debug('No confirmation page detected, continuing normally');
+    }
+  }
+
   private async handleActeDocumentSelection(): Promise<void> {
     if (!this.page) throw new Error('Page not initialized');
     
@@ -2053,28 +2209,31 @@ export class AIRegistreExtractor {
 
   private async waitForDocumentAndDownload(config: ExtractionConfig): Promise<string> {
     if (!this.page) throw new Error('Page not initialized');
-    
+
     // Wait for document to load - this can take up to 3 minutes
     logger.info({ workerId: this.workerId }, 'Waiting for document to load');
-    
+
     const searchPageUrl = this.page.url();
     logger.debug({ searchPageUrl }, 'Current URL before document load');
-    
+
+    // Check if we landed on the confirmation page for large files
+    await this.handleConfirmationPageIfPresent();
+
     // Wait for menu frame to appear (indicating document has loaded)
     let documentLoaded = false;
     let attempts = 0;
     const maxAttempts = 60; // 3 minutes with 3 second intervals
-    
+
     while (!documentLoaded && attempts < maxAttempts) {
       attempts++;
-      
+
       // Check for URL change
       if (this.page.url() !== searchPageUrl) {
         logger.info('URL changed, document loading');
         documentLoaded = true;
         break;
       }
-      
+
       // Check for menu frame - this indicates document has loaded
       const frames = this.page.frames();
       if (frames.length > 1) {
@@ -2084,7 +2243,7 @@ export class AIRegistreExtractor {
           documentLoaded = true;
           break;
         }
-        
+
         // Also check for page frame as fallback
         const pageFrame = frames.find(f => f.name() === 'page' || f.url().includes('Docmn'));
         if (pageFrame) {
@@ -2093,15 +2252,15 @@ export class AIRegistreExtractor {
           break;
         }
       }
-      
+
       // Wait 3 seconds before next check
       await this.page.waitForTimeout(3000);
-      
+
       if (attempts % 10 === 0) {
         logger.info({ attempts, maxAttempts }, 'Still waiting for document to load...');
       }
     }
-    
+
     if (!documentLoaded) {
       throw new Error('Document did not load after 3 minutes');
     }
