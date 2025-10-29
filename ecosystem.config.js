@@ -29,14 +29,14 @@
 module.exports = {
   apps: [
     // ========================================================================
-    // REGISTRE EXTRACTION WORKERS (Land Registry)
+    // UNIFIED WORKERS (All Job Types)
     // ========================================================================
-    // Handles: actes, index, plan_cadastraux extraction
+    // Handles: Land Registry (actes, index, plan_cadastraux), REQ, RDPRM
     // Features: Acte fallback, Plan cadastraux fallback, Confirmation pages
-    // Status: ✅ FULLY WORKING with new fallback mechanisms
+    // Status: ✅ FULLY WORKING - All job types supported
     {
       name: 'registre-worker',
-      script: 'dist/worker/index.js',
+      script: 'dist/worker/unified-worker.js',  // Changed from index.js to unified-worker.js
       instances: 3,  // Run 3 PM2 instances for concurrency
       exec_mode: 'cluster',  // Enable cluster mode for load balancing
       autorestart: true,

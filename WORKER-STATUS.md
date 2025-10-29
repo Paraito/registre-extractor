@@ -126,45 +126,54 @@ curl http://localhost:3000/api/workers | jq
 
 ---
 
-## ❌ NOT IMPLEMENTED (Placeholders Only)
+## ✅ NEWLY IMPLEMENTED
 
 ### 1. REQ Workers
 
-**Status**: ❌ **NOT IMPLEMENTED**
+**Status**: ✅ **IMPLEMENTED**
 
-**What They Should Do**:
+**What They Do**:
 - Scrape Registre des Entreprises du Québec (Quebec Business Registry)
 - Extract company information by NEQ (Numéro d'entreprise du Québec)
+- Extract director/officer names for RDPRM searches
 
-**Current State**:
-- Placeholder exists in `src/req/scraper.ts`
-- Throws error: `"REQ scraping functionality not yet implemented"`
-- Unified worker (`src/worker/unified-worker.ts`) has integration code but scraper is not implemented
+**Implementation**:
+- Full implementation in `src/req/scraper.ts`
+- Uses Playwright + AgentQL for AI-powered scraping
+- Searches by company name or NEQ number
+- Extracts company details including directors
+- Saves results to `req_companies` and `req_company_details` tables
 
-**To Implement**:
-- Need to implement `scrapeRegistreEntreprise()` function in `src/req/scraper.ts`
-- Need to define scraping logic for REQ website
-- Need to handle authentication and session management
+**Features**:
+- AI-powered element detection with AgentQL
+- Automatic company search and selection
+- Director name extraction for RDPRM
+- Error handling and logging
 
 ---
 
 ### 2. RDPRM Workers
 
-**Status**: ❌ **NOT IMPLEMENTED**
+**Status**: ✅ **IMPLEMENTED**
 
-**What They Should Do**:
+**What They Do**:
 - Scrape Registre des Droits Personnels et Réels Mobiliers
 - Extract personal and movable real rights information
+- Download results as PDF
 
-**Current State**:
-- Placeholder exists in `src/rdprm/scraper.ts`
-- Throws error: `"RDPRM scraping functionality not yet implemented"`
-- Unified worker (`src/worker/unified-worker.ts`) has integration code but scraper is not implemented
+**Implementation**:
+- Full implementation in `src/rdprm/scraper.ts`
+- Uses Playwright + AgentQL for AI-powered scraping
+- Searches by person/company name
+- Downloads results as PDF
+- Handles "no results" cases gracefully
 
-**To Implement**:
-- Need to implement `scrapeRDPRM()` function in `src/rdprm/scraper.ts`
-- Need to define scraping logic for RDPRM website
-- Need to handle authentication and session management
+**Features**:
+- AI-powered element detection with AgentQL
+- Automatic terms acceptance
+- Result detection (has results vs no results)
+- PDF download and storage
+- Error handling and logging
 
 ---
 
