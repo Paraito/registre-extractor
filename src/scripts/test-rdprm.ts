@@ -11,7 +11,6 @@
 import { config } from 'dotenv';
 import { supabaseManager, EnvironmentName } from '../utils/supabase';
 import { scrapeRDPRM } from '../rdprm/scraper';
-import { logger } from '../utils/logger';
 import type { RDPRMSearch } from '../types/req-rdprm';
 
 config();
@@ -28,7 +27,7 @@ async function checkDatabaseSchema() {
   }
 
   // Check if rdprm_searches table exists and get its schema
-  const { data: tableInfo, error: tableError } = await client
+  const { error: tableError } = await client
     .from('rdprm_searches')
     .select('*')
     .limit(1);
@@ -64,53 +63,6 @@ async function checkDatabaseSchema() {
   }
 
   return true;
-}
-
-async function createTestSession() {
-  console.log('\n=== Creating Test Session ===\n');
-
-  const client = supabaseManager.getServiceClient(TEST_ENVIRONMENT);
-  if (!client) {
-    throw new Error(`No Supabase client for environment: ${TEST_ENVIRONMENT}`);
-  }
-
-  // First, try to get or create a test user
-  let userId: string;
-  const { data: existingUsers, error: userQueryError } = await client
-    .from('users')
-    .select('id')
-    .limit(1);
-
-  if (userQueryError) {
-    console.log('⚠️  Could not query users table:', userQueryError.message);
-    console.log('   Using a dummy UUID for user_id');
-    userId = '00000000-0000-0000-0000-000000000001'; // Dummy UUID
-  } else if (existingUsers && existingUsers.length > 0) {
-    userId = existingUsers[0].id;
-    console.log('✅ Using existing user:', userId);
-  } else {
-    console.log('⚠️  No users found, using dummy UUID');
-    userId = '00000000-0000-0000-0000-000000000001'; // Dummy UUID
-  }
-
-  // Create a test search session
-  const { data: session, error: sessionError } = await client
-    .from('search_sessions')
-    .insert({
-      user_id: userId,
-      initial_search_query: TEST_COMPANY_NAME,
-      status: 'rdprm_in_progress',
-    })
-    .select()
-    .single();
-
-  if (sessionError) {
-    console.error('❌ Error creating search session:', sessionError);
-    throw sessionError;
-  }
-
-  console.log('✅ Created test session:', session.id);
-  return session.id;
 }
 
 async function createTestRDPRMJob(sessionId: string) {
