@@ -513,10 +513,10 @@ export async function scrapeRDPRM(search: RDPRMSearch & { _environment: Environm
   } catch {}
 
   const context = await chromium.launchPersistentContext(sessionDir, {
-    headless: false,  // Always false - RDPRM site needs full rendering
+    headless: true,  // Must be true on headless server
     acceptDownloads: true,
     viewport: { width: 1366, height: 900 },
-    slowMo: 500,  // Always 500ms - RDPRM site needs delays between actions
+    slowMo: 500,  // Critical: RDPRM site needs 500ms delays between actions (from RDPRM 2)
   });
   const page = await context.newPage();
 
