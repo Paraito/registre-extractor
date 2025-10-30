@@ -476,7 +476,6 @@ export class UnifiedWorker {
       .from('rdprm_searches')
       .update({
         status: 'in_progress',
-        updated_at: new Date().toISOString(),
       })
       .eq('id', search.id)
       .eq('status', 'pending')
@@ -637,7 +636,6 @@ export class UnifiedWorker {
         .update({
           status: 'completed',
           completed_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
         })
         .eq('id', job.id);
 
@@ -648,7 +646,6 @@ export class UnifiedWorker {
         .update({
           status: 'failed',
           error_message: error instanceof Error ? error.message : 'Unknown error',
-          updated_at: new Date().toISOString(),
         })
         .eq('id', job.id);
 
