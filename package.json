@@ -17,6 +17,7 @@
     "ocr:dev": "tsx watch src/ocr/start-ocr-workers.ts",
     "ocr:start": "node dist/ocr/start-ocr-workers.js",
     "diagnose": "tsx src/scripts/diagnose-polling.ts",
+    "test:rdprm": "tsx src/scripts/test-rdprm.ts",
     "typecheck": "tsc --noEmit",
     "test": "jest",
     "test:watch": "jest --watch",

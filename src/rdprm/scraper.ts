@@ -70,25 +70,33 @@ async function login(page: Page, dataDir: string) {
   try {
     await page.goto("https://servicesclients.rdprm.gouv.qc.ca/MesServices/", {
       waitUntil: "domcontentloaded",
+      timeout: 30000,
     });
+    await page.waitForTimeout(2000); // Wait for page to stabilize
     if (await page.getByText("Bienvenue", { exact: false }).isVisible()) {
       logger.info('[RDPRM] Existing session detected, skipping login');
       await debugScreenshot(page, "01c_dashboard_detected", dataDir);
       return;
     }
-  } catch {}
+  } catch (error) {
+    logger.debug('[RDPRM] No existing session found, will proceed to login');
+  }
 
-  logger.info('[RDPRM] Proceeding to login form...');
+  // Navigate to login page explicitly (dashboard redirects to login if not authenticated)
+  logger.info('[RDPRM] Navigating to login page...');
+  await page.goto("https://servicesclients.rdprm.gouv.qc.ca/MesServices/", {
+    waitUntil: "domcontentloaded",
+    timeout: 60000,
+  });
+  await page.waitForTimeout(3000); // Wait for login form to initialize
   await debugScreenshot(page, "02_login_page", dataDir);
 
   // Credentials
   logger.info('[RDPRM] Entering credentials...');
 
-  // Wait for the login form to be ready
-  await page.waitForTimeout(3000);
-
-  // Fill username field
+  // Wait for the login form to be ready and visible
   const usernameField = page.locator('input[type="text"]').first();
+  await usernameField.waitFor({ state: 'visible', timeout: 30000 });
   await usernameField.fill(RDPRM_USER);
 
   // Fill password field
@@ -160,10 +168,36 @@ async function searchOrganisme(page: Page, company: string, dataDir: string) {
   await debugScreenshot(page, "10_before_search", dataDir);
 
   // Wait for the search form to load
-  await page.waitForTimeout(2000);
+  await page.waitForTimeout(3000);
 
-  // Find the "Nom de l'organisme" field
-  const searchField = page.getByLabel(/Nom de l['']organisme/i);
+  // Try multiple selectors to find the "Nom de l'organisme" field specifically
+  let searchField;
+
+  // Try 1: By label text "Nom de l'organisme" (most reliable and specific)
+  try {
+    searchField = page.getByLabel(/Nom de l['']organisme/i);
+    await searchField.waitFor({ state: 'visible', timeout: 10000 });
+    logger.info('[RDPRM] Found search field by label "Nom de l\'organisme"');
+  } catch {
+    // Try 2: By ID or name attribute containing "organisme"
+    try {
+      searchField = page.locator('input[id*="organisme" i], input[name*="organisme" i]').first();
+      await searchField.waitFor({ state: 'visible', timeout: 5000 });
+      logger.info('[RDPRM] Found search field by organisme attribute');
+    } catch {
+      // Try 3: By placeholder containing "organisme"
+      try {
+        searchField = page.locator('input[placeholder*="organisme" i]');
+        await searchField.waitFor({ state: 'visible', timeout: 5000 });
+        logger.info('[RDPRM] Found search field by placeholder');
+      } catch {
+        logger.error('[RDPRM] Could not find "Nom de l\'organisme" field with any selector');
+        await debugScreenshot(page, "10_search_field_not_found", dataDir);
+        throw new Error('Search field "Nom de l\'organisme" not found');
+      }
+    }
+  }
+
   await searchField.fill(company);
   await debugScreenshot(page, "10_search_filled", dataDir);
 
@@ -171,29 +205,37 @@ async function searchOrganisme(page: Page, company: string, dataDir: string) {
   await page.getByRole("button", { name: /Rechercher|Soumettre/i }).click();
   await debugScreenshot(page, "11_after_search_click", dataDir);
 
-  // First confirmation dialog - Amount confirmation (12,00 $)
-  logger.info('[RDPRM] Waiting for amount confirmation dialog (12,00 $)...');
-  const amountConfirmBtn = page.getByRole("button", { name: /Confirmer/i });
-  await amountConfirmBtn.waitFor({ state: "visible", timeout: 30000 });
-  await debugScreenshot(page, "12_confirm_amount", dataDir);
+  // Wait for page to process the search
+  await page.waitForTimeout(2000);
 
-  const dialogContent = await page.locator('[role="dialog"]').textContent().catch(() => "") || "";
-  if (dialogContent.includes("12,00") || dialogContent.includes("12.00") || dialogContent.includes("$")) {
-    logger.info('[RDPRM] Amount confirmation dialog detected');
+  // Try to handle confirmation dialogs (they may or may not appear)
+  try {
+    logger.info('[RDPRM] Checking for amount confirmation dialog (12,00 $)...');
+    const amountConfirmBtn = page.getByRole("button", { name: /Confirmer/i });
+    await amountConfirmBtn.waitFor({ state: "visible", timeout: 10000 });
+    await debugScreenshot(page, "12_confirm_amount", dataDir);
+
+    const dialogContent = await page.locator('[role="dialog"]').textContent().catch(() => "") || "";
+    if (dialogContent.includes("12,00") || dialogContent.includes("12.00") || dialogContent.includes("$")) {
+      logger.info('[RDPRM] Amount confirmation dialog detected');
+    }
+
+    await amountConfirmBtn.click();
+    logger.info('[RDPRM] Amount confirmed');
+    await page.waitForTimeout(1000);
+    await debugScreenshot(page, "12b_after_amount_confirm", dataDir);
+
+    // Second confirmation dialog
+    logger.info('[RDPRM] Checking for second confirmation dialog...');
+    const secondConfirmBtn = page.getByRole("button", { name: /Confirmer/i });
+    await secondConfirmBtn.waitFor({ state: "visible", timeout: 10000 });
+    await debugScreenshot(page, "12c_second_confirm", dataDir);
+    await secondConfirmBtn.click();
+    logger.info('[RDPRM] Second confirmation completed');
+  } catch (error) {
+    logger.info('[RDPRM] No confirmation dialogs appeared, proceeding to results');
+    await debugScreenshot(page, "12_no_dialogs", dataDir);
   }
-
-  await amountConfirmBtn.click();
-  logger.info('[RDPRM] Amount confirmed');
-  await page.waitForTimeout(1000);
-  await debugScreenshot(page, "12b_after_amount_confirm", dataDir);
-
-  // Second confirmation dialog
-  logger.info('[RDPRM] Waiting for second confirmation dialog...');
-  const secondConfirmBtn = page.getByRole("button", { name: /Confirmer/i });
-  await secondConfirmBtn.waitFor({ state: "visible", timeout: 30000 });
-  await debugScreenshot(page, "12c_second_confirm", dataDir);
-  await secondConfirmBtn.click();
-  logger.info('[RDPRM] Second confirmation completed');
 
   // Wait for results section to load
   logger.info('[RDPRM] Waiting for results to load...');
@@ -510,20 +552,45 @@ export async function scrapeRDPRM(search: RDPRMSearch & { _environment: Environm
   // Create data directory
   await fs.mkdir(searchDataDir, { recursive: true });
 
-  // Clear Playwright persistent session cache
-  const sessionDir = path.join(searchDataDir, ".pw-session");
-  try {
-    await fs.rm(sessionDir, { recursive: true, force: true });
-    logger.debug('[RDPRM] Cleared Playwright session cache');
-  } catch {}
+  // Check for BrowserBase credentials
+  const BROWSERBASE_API_KEY = process.env.BROWSERBASE_API_KEY;
+  const BROWSERBASE_PROJECT_ID = process.env.BROWSERBASE_PROJECT_ID;
 
-  const context = await chromium.launchPersistentContext(sessionDir, {
-    headless: true,  // Must be true on headless server
-    acceptDownloads: true,
-    viewport: { width: 1366, height: 900 },
-    slowMo: 500,  // Critical: RDPRM site needs 500ms delays between actions (from RDPRM 2)
-  });
-  const page = await context.newPage();
+  let browser;
+  let context;
+  let page;
+
+  if (BROWSERBASE_API_KEY && BROWSERBASE_PROJECT_ID) {
+    // Use BrowserBase (bypasses Cloudflare)
+    logger.info('[RDPRM] Connecting to BrowserBase...');
+
+    browser = await chromium.connectOverCDP(
+      `wss://connect.browserbase.com?apiKey=${BROWSERBASE_API_KEY}&projectId=${BROWSERBASE_PROJECT_ID}`
+    );
+
+    logger.info('[RDPRM] Connected to BrowserBase successfully');
+
+    context = browser.contexts()[0];
+    page = context.pages()[0] || await context.newPage();
+  } else {
+    // Fallback to local browser (for local development)
+    logger.warn('[RDPRM] BrowserBase credentials not found, using local browser (may be blocked by Cloudflare)');
+
+    // Clear Playwright persistent session cache
+    const sessionDir = path.join(searchDataDir, ".pw-session");
+    try {
+      await fs.rm(sessionDir, { recursive: true, force: true });
+      logger.debug('[RDPRM] Cleared Playwright session cache');
+    } catch {}
+
+    context = await chromium.launchPersistentContext(sessionDir, {
+      headless: true,  // Must be true on headless server
+      acceptDownloads: true,
+      viewport: { width: 1366, height: 900 },
+      slowMo: 500,  // Critical: RDPRM site needs 500ms delays between actions (from RDPRM 2)
+    });
+    page = await context.newPage();
+  }
 
   try {
     await login(page, searchDataDir);
@@ -579,7 +646,14 @@ export async function scrapeRDPRM(search: RDPRMSearch & { _environment: Environm
     await debugScreenshot(page, "ERROR", searchDataDir);
     throw error;
   } finally {
-    await context.close();
-    logger.info('[RDPRM] Browser context closed');
+    if (browser) {
+      // BrowserBase connection
+      await browser.close();
+      logger.info('[RDPRM] BrowserBase session closed');
+    } else {
+      // Local persistent context
+      await context.close();
+      logger.info('[RDPRM] Browser context closed');
+    }
   }
 }
