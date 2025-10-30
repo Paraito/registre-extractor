@@ -50,8 +50,10 @@ async function login(page: Page, dataDir: string) {
 
   logger.info('[RDPRM] Navigating to homepage...');
   await page.goto("https://www.rdprm.gouv.qc.ca/fr/Pages/Accueil.html", {
-    waitUntil: "networkidle",
+    waitUntil: "domcontentloaded",
+    timeout: 60000,
   });
+  await page.waitForTimeout(2000); // Wait for any dynamic content
   await debugScreenshot(page, "01_homepage", dataDir);
 
   // Handle cookie banner if present
