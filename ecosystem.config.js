@@ -66,6 +66,7 @@ module.exports = {
       name: 'registre-ocr',
       script: 'dist/ocr/start-ocr-workers.js',
       instances: 1,
+      exec_mode: 'fork',  // Use fork mode (not cluster) for single instance
       autorestart: true,
       watch: false,
       max_memory_restart: '768M',  // Increased from 512M for stability
@@ -92,6 +93,7 @@ module.exports = {
       name: 'registre-monitor',
       script: 'dist/monitor/index.js',
       instances: 1,
+      exec_mode: 'fork',  // Use fork mode (not cluster) for single instance
       autorestart: true,
       watch: false,
       max_memory_restart: '256M',
@@ -116,6 +118,7 @@ module.exports = {
       name: 'registre-api',
       script: 'dist/api/index.js',
       instances: 1,
+      exec_mode: 'fork',  // Use fork mode (not cluster) for single instance
       autorestart: true,
       watch: false,
       max_memory_restart: '512M',  // Increased from 256M
