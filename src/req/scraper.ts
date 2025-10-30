@@ -5,346 +5,366 @@
  * Website: https://www.registreentreprises.gouv.qc.ca/
  */
 
-import { chromium, Browser, Page, BrowserContext } from 'playwright';
-import { wrap, PageExt } from 'agentql';
+import { chromium, Page } from 'playwright';
 import { logger } from '../utils/logger';
-import { supabaseManager } from '../utils/supabase';
-import type { SearchSession, REQCompany, REQCompanyDetails } from '../types/req-rdprm';
+import { supabaseManager, EnvironmentName } from '../utils/supabase';
+import type { SearchSession } from '../types/req-rdprm';
 import path from 'path';
 import fs from 'fs/promises';
+import { cleanRegistreData } from './html-cleaner';
+
+export class CompanyNotFoundError extends Error {
+  constructor(
+    message = "Company was not found in Registre des entreprises. Check name spelling or try a different search term."
+  ) {
+    super(message);
+    this.name = "CompanyNotFoundError";
+  }
+}
+
+async function debugScreenshot(page: Page, name: string, dataDir: string) {
+  const DEBUG_MODE = process.env.DEBUG_PLAYWRIGHT === "true";
+  if (DEBUG_MODE) {
+    const screenshotPath = path.join(
+      dataDir,
+      `debug_req_${name}_${Date.now()}.png`
+    );
+    await page.screenshot({ path: screenshotPath, fullPage: true });
+    logger.debug(`Screenshot saved: ${screenshotPath}`);
+  }
+}
+
+async function navigateToSearch(page: Page, dataDir: string) {
+  logger.info('[REQ] Navigating to search page...');
+  await page.goto(
+    "https://www.registreentreprises.gouv.qc.ca/reqna/gr/gr03/gr03a71.rechercheregistre.mvc/gr03a71?choixdomaine=RegistreEntreprisesQuebec",
+    { waitUntil: "domcontentloaded", timeout: 60000 }
+  );
+
+  // Wait for page to be ready
+  await page.waitForTimeout(2000);
+  await debugScreenshot(page, "01_search_page", dataDir);
+}
+
+async function searchCompany(page: Page, company: string, dataDir: string, navigateFirst: boolean = false) {
+  logger.info(`[REQ] Searching for: ${company}`);
+
+  // Navigate to search page if requested (for subsequent searches)
+  if (navigateFirst) {
+    await navigateToSearch(page, dataDir);
+  }
+
+  // Wait for page to be ready
+  await page.waitForTimeout(2000);
+
+  // Fill in the search field - "Objet de la recherche"
+  logger.info('[REQ] Filling search field...');
+  let searchField = page.locator('input[name="objetRecherche"]');
+  if (!(await searchField.isVisible().catch(() => false))) {
+    searchField = page.locator('input[type="text"]').first();
+  }
+  await searchField.waitFor({ state: "visible", timeout: 10000 });
+  await searchField.fill(company);
+  await page.waitForTimeout(500);
+  await debugScreenshot(page, "02_search_filled", dataDir);
+
+  // Accept terms of use checkbox
+  logger.info('[REQ] Accepting terms of use...');
+  const termsCheckbox = page.locator('input[type="checkbox"]').first();
+  await termsCheckbox.waitFor({ state: "visible", timeout: 10000 });
+  await termsCheckbox.check();
+  await page.waitForTimeout(500);
+  await debugScreenshot(page, "03_terms_accepted", dataDir);
+
+  // Click search button
+  logger.info('[REQ] Clicking search button...');
+  let searchButton = page.getByRole("button", { name: /Rechercher/i });
+  if (!(await searchButton.isVisible().catch(() => false))) {
+    searchButton = page.locator('input[type="submit"]').first();
+  }
+  await searchButton.waitFor({ state: "visible", timeout: 10000 });
+  await searchButton.click();
+
+  // Wait for results to load
+  logger.info('[REQ] Waiting for search results...');
+  await page.waitForTimeout(3000);
+  await debugScreenshot(page, "04_search_results", dataDir);
+}
+
+async function processAllResults(
+  page: Page,
+  company: string,
+  dataDir: string,
+  sessionId: string,
+  environment: EnvironmentName
+): Promise<Array<{ companyId: string; url: string; resultNumber: number }>> {
+  logger.info('[REQ] Looking for Consulter buttons...');
+
+  await page.waitForTimeout(3000);
+
+  // Try multiple ways to find the Consulter button/link
+  let consulterElements = page.getByRole("button", { name: /Consulter/i });
+  let count = await consulterElements.count();
+
+  if (count === 0) {
+    consulterElements = page.getByRole("link", { name: /Consulter/i });
+    count = await consulterElements.count();
+  }
+
+  if (count === 0) {
+    consulterElements = page.locator('input[value*="Consulter"]');
+    count = await consulterElements.count();
+  }
+
+  if (count === 0) {
+    consulterElements = page.getByText(/Consulter/i);
+    count = await consulterElements.count();
+  }
+
+  logger.info(`[REQ] Found ${count} Consulter button(s)`);
+
+  // Get the supabase client for this environment
+  const client = supabaseManager.getServiceClient(environment);
+  if (!client) {
+    throw new Error(`No Supabase client for environment: ${environment}`);
+  }
+
+  // Log the number of results found to the database
+  logger.info(`[REQ] Logging result count (${count}) to database...`);
+  const { error: countError } = await client
+    .from("search_sessions")
+    .update({ req_results_count: count })
+    .eq("id", sessionId);
+
+  if (countError) {
+    logger.error({ error: countError }, '[REQ] Error logging result count');
+  }
+
+  if (count === 0) {
+    throw new CompanyNotFoundError(
+      "La compagnie n'a pas été trouvée sur le registre des entreprises. Veuillez essayer avec un autre nom."
+    );
+  }
+
+  const results: Array<{ companyId: string; url: string; resultNumber: number }> = [];
+
+  // Process each result
+  for (let i = 0; i < count; i++) {
+    const resultNumber = i + 1;
+    logger.info(`[REQ] Processing result ${resultNumber}/${count}...`);
+
+    try {
+      // If not the first iteration, perform the search again
+      if (i > 0) {
+        logger.info('[REQ] Performing search again to get fresh results...');
+        await searchCompany(page, company, dataDir, true);
+
+        // Re-find the Consulter buttons
+        consulterElements = page.getByRole("button", { name: /Consulter/i });
+        if (await consulterElements.count() === 0) {
+          consulterElements = page.getByRole("link", { name: /Consulter/i });
+        }
+        if (await consulterElements.count() === 0) {
+          consulterElements = page.locator('input[value*="Consulter"]');
+        }
+        if (await consulterElements.count() === 0) {
+          consulterElements = page.getByText(/Consulter/i);
+        }
+
+        await page.waitForTimeout(2000);
+      }
+
+      // Click the i-th Consulter button
+      logger.info(`[REQ] Clicking Consulter button ${resultNumber}...`);
+      await consulterElements.nth(i).click();
+
+      // Wait for company page to load
+      logger.info('[REQ] Waiting for company page to load...');
+      await page.waitForTimeout(3000);
+
+      // Extract HTML content
+      logger.info(`[REQ] Extracting HTML content for result ${resultNumber}...`);
+      const htmlContent = await extractHTMLContent(page);
+      const pageUrl = page.url();
+
+      // Prepare raw_data for cleaning
+      const rawData = {
+        html_content: htmlContent,
+        page_url: pageUrl,
+        captured_at: new Date().toISOString(),
+        result_number: resultNumber,
+      };
+
+      // Clean the HTML data
+      logger.info(`[REQ] Cleaning HTML data for company ${resultNumber}...`);
+      let cleanedData;
+      try {
+        cleanedData = cleanRegistreData(rawData);
+        const nomCount = cleanedData.index_noms.nom.length;
+        const autreNomsCount = cleanedData.index_noms.autre_noms.length;
+        const etablissementsCount = cleanedData.etablissements.length;
+        logger.info(`[REQ] Successfully cleaned data. Établissements: ${etablissementsCount}, Noms: ${nomCount}, Autres noms: ${autreNomsCount}`);
+      } catch (error) {
+        logger.error({ error }, '[REQ] Error cleaning HTML data');
+        cleanedData = null;
+      }
+
+      // Create req_company record in database
+      logger.info(`[REQ] Saving company ${resultNumber} to database...`);
+      const { data: companyData, error: companyError } = await client
+        .from("req_companies")
+        .insert({
+          search_session_id: sessionId,
+          company_name: company,
+          is_selected: false,
+          result_order: resultNumber,
+          cleaned_data: cleanedData,
+        })
+        .select()
+        .single();
+
+      if (companyError) {
+        logger.error({ error: companyError }, '[REQ] Error saving company to database');
+        throw companyError;
+      }
+
+      const companyId = companyData.id;
+      logger.info({ companyId }, `[REQ] Company saved with ID`);
+
+      results.push({
+        companyId,
+        url: pageUrl,
+        resultNumber
+      });
+
+      logger.info(`[REQ] Result ${resultNumber}/${count} captured and saved successfully`);
+    } catch (error) {
+      logger.error({ error, resultNumber }, `[REQ] Error processing result ${resultNumber}/${count}`);
+      logger.info(`[REQ] Skipping result ${resultNumber} and continuing with next result...`);
+      continue;
+    }
+  }
+
+  return results;
+}
 
 /**
- * REQ Scraper Class
- * Handles scraping of Quebec Business Registry
+ * Extract HTML content from the page (main content only)
  */
-export class REQScraper {
-  private browser: Browser | null = null;
-  private context: BrowserContext | null = null;
-  private page: Page | null = null;
-  private agentQLPage: PageExt | null = null;
-  private downloadPath: string;
+async function extractHTMLContent(page: Page): Promise<string> {
+  const contentSelectors = [
+    '#content',
+    'main',
+    '#main',
+    '.main-content',
+    '[role="main"]',
+    '#corps',
+    '.contenu',
+  ];
 
-  constructor(private session: SearchSession) {
-    const baseDir = process.env.DOWNLOADS_DIR || '/tmp/req-downloads';
-    this.downloadPath = path.join(baseDir, session.id);
-  }
-
-  async initialize(): Promise<void> {
-    logger.info({ sessionId: this.session.id }, 'Initializing REQ scraper');
-
-    // Create download directory
-    await fs.mkdir(this.downloadPath, { recursive: true });
-
-    // Launch browser
-    this.browser = await chromium.launch({
-      headless: process.env.NODE_ENV === 'production',
-      args: ['--no-sandbox', '--disable-setuid-sandbox'],
-    });
-
-    this.context = await this.browser.newContext({
-      acceptDownloads: true,
-      viewport: { width: 1920, height: 1080 },
-    });
-
-    this.page = await this.context.newPage();
-    this.agentQLPage = await wrap(this.page);
-
-    logger.info({ sessionId: this.session.id }, 'REQ scraper initialized');
-  }
-
-  async close(): Promise<void> {
-    if (this.browser) {
-      await this.browser.close();
-      this.browser = null;
-      this.page = null;
-      this.agentQLPage = null;
-    }
-  }
-
-  /**
-   * Search for companies by query (name or NEQ)
-   */
-  async searchCompanies(): Promise<REQCompany[]> {
-    if (!this.page || !this.agentQLPage) {
-      throw new Error('Scraper not initialized');
-    }
-
-    logger.info({
-      sessionId: this.session.id,
-      query: this.session.initial_search_query
-    }, 'Searching REQ for companies');
-
+  for (const selector of contentSelectors) {
     try {
-      // Navigate to REQ search page
-      await this.page.goto('https://www.registreentreprises.gouv.qc.ca/RQAnglais/recherche/RechercheEntreprise.aspx', {
-        waitUntil: 'networkidle',
-        timeout: 30000,
-      });
-
-      // Find search input and button using AgentQL
-      const searchQuery = `{
-        searchInput(description: "Input field for company name or NEQ number")
-        searchButton(description: "Button to submit search, might say 'Search' or 'Rechercher'")
-      }`;
-
-      const { searchInput, searchButton } = await this.agentQLPage.queryElements(searchQuery);
-
-      if (!searchInput || !searchButton) {
-        throw new Error('Could not find search form elements');
+      const element = await page.locator(selector).first();
+      if (await element.count() > 0) {
+        const content = await element.innerHTML();
+        logger.debug({ selector }, '[REQ] HTML content extracted using selector');
+        return content;
       }
-
-      // Fill search query
-      await searchInput.fill(this.session.initial_search_query);
-      logger.info('Filled search query');
-
-      // Click search button
-      await searchButton.click();
-      logger.info('Clicked search button');
-
-      // Wait for results
-      await this.page.waitForLoadState('networkidle', { timeout: 30000 });
-
-      // Extract company results
-      const companies = await this.extractCompanyResults();
-
-      logger.info({
-        sessionId: this.session.id,
-        count: companies.length
-      }, 'Found companies in REQ');
-
-      return companies;
-
-    } catch (error) {
-      logger.error({
-        error,
-        sessionId: this.session.id
-      }, 'Failed to search REQ');
-      throw error;
+    } catch (e) {
+      // Continue to next selector
     }
   }
 
-  /**
-   * Extract company results from search page
-   */
-  private async extractCompanyResults(): Promise<REQCompany[]> {
-    if (!this.page || !this.agentQLPage) {
-      throw new Error('Scraper not initialized');
-    }
-
-    try {
-      // Use AgentQL to find company results
-      const resultsQuery = `{
-        companyRows(description: "Table rows or list items containing company information with NEQ, name, and status")[]
-      }`;
-
-      const { companyRows } = await this.agentQLPage.queryElements(resultsQuery);
-
-      if (!companyRows || companyRows.length === 0) {
-        logger.warn({ sessionId: this.session.id }, 'No companies found in search results');
-        return [];
-      }
-
-      const companies: REQCompany[] = [];
-
-      for (const row of companyRows) {
-        try {
-          // Extract company data from row
-          const rowQuery = `{
-            neqNumber(description: "NEQ number or enterprise number")
-            companyName(description: "Company or enterprise name")
-            status(description: "Company status like Active, Inactive, etc")
-            address(description: "Company address")
-          }`;
-
-          const wrappedRow = await wrap(row);
-          const rowData = await wrappedRow.queryElements(rowQuery);
-
-          const neq = await rowData.neqNumber?.textContent() || '';
-          const name = await rowData.companyName?.textContent() || '';
-          const status = await rowData.status?.textContent() || '';
-          const address = await rowData.address?.textContent() || '';
-
-          if (neq && name) {
-            companies.push({
-              id: '', // Will be set by database
-              search_session_id: this.session.id,
-              neq: neq.trim(),
-              company_name: name.trim(),
-              status: status.trim(),
-              address: address.trim() || undefined,
-              created_at: new Date().toISOString(),
-            });
-          }
-        } catch (rowError) {
-          logger.warn({ error: rowError }, 'Failed to extract company from row');
-        }
-      }
-
-      return companies;
-
-    } catch (error) {
-      logger.error({ error, sessionId: this.session.id }, 'Failed to extract company results');
-      throw error;
-    }
-  }
-
-  /**
-   * Scrape detailed company information
-   */
-  async scrapeCompanyDetails(company: REQCompany): Promise<REQCompanyDetails> {
-    if (!this.page || !this.agentQLPage) {
-      throw new Error('Scraper not initialized');
-    }
-
-    logger.info({
-      sessionId: this.session.id,
-      neq: company.neq,
-      companyName: company.company_name
-    }, 'Scraping company details');
-
-    try {
-      // Navigate to company details page
-      // The URL pattern is typically: /RQAnglais/entreprise/[NEQ]/
-      const detailsUrl = `https://www.registreentreprises.gouv.qc.ca/RQAnglais/entreprise/${company.neq}/`;
-
-      await this.page.goto(detailsUrl, {
-        waitUntil: 'networkidle',
-        timeout: 30000,
-      });
-
-      // Extract all company information
-      const detailsQuery = `{
-        companyInfo(description: "Section containing company information")
-        directors(description: "List of directors, administrators, or officers")[]
-        addresses(description: "Business addresses")[]
-        activities(description: "Business activities or NAICS codes")[]
-      }`;
-
-      const details = await this.agentQLPage.queryElements(detailsQuery);
-
-      // Extract names for RDPRM searches
-      const namesFound: string[] = [];
-
-      // Extract director names
-      if (details.directors && details.directors.length > 0) {
-        for (const director of details.directors) {
-          try {
-            const nameQuery = `{
-              personName(description: "Person's full name")
-            }`;
-            const wrappedDirector = await wrap(director);
-            const { personName } = await wrappedDirector.queryElements(nameQuery);
-            const name = await personName?.textContent();
-            if (name) {
-              namesFound.push(name.trim());
-            }
-          } catch (e) {
-            logger.debug({ error: e }, 'Failed to extract director name');
-          }
-        }
-      }
-
-      // Build full data object
-      const fullData: Record<string, any> = {
-        neq: company.neq,
-        company_name: company.company_name,
-        status: company.status,
-        address: company.address,
-        scraped_at: new Date().toISOString(),
-        // Add more fields as extracted
-      };
-
-      logger.info({
-        sessionId: this.session.id,
-        neq: company.neq,
-        namesFound: namesFound.length
-      }, 'Scraped company details');
-
-      return {
-        id: '', // Will be set by database
-        req_company_id: company.id,
-        full_data: fullData,
-        names_found: namesFound,
-        created_at: new Date().toISOString(),
-      };
-
-    } catch (error) {
-      logger.error({
-        error,
-        sessionId: this.session.id,
-        neq: company.neq
-      }, 'Failed to scrape company details');
-      throw error;
-    }
-  }
+  // If no main content found, get the whole page content
+  logger.debug('[REQ] No main content selector found, using full page content');
+  return await page.content();
 }
 
 /**
  * Main scraping function called by unified worker
  */
-export async function scrapeRegistreEntreprise(session: SearchSession): Promise<void> {
-  const scraper = new REQScraper(session);
+export async function scrapeRegistreEntreprise(session: SearchSession & { _environment: EnvironmentName }): Promise<void> {
+  const dataDir = process.env.DOWNLOADS_DIR || '/tmp/req-downloads';
+  const sessionDataDir = path.join(dataDir, session.id);
+
+  const DEBUG_MODE = process.env.DEBUG_PLAYWRIGHT === "true";
+
+  logger.info({
+    sessionId: session.id,
+    query: session.initial_search_query,
+    debugMode: DEBUG_MODE,
+    environment: session._environment,
+  }, '[REQ] Starting scraping');
+
+  // Create data directory
+  await fs.mkdir(sessionDataDir, { recursive: true });
+
+  // Check for BrowserBase credentials
+  const BROWSERBASE_API_KEY = process.env.BROWSERBASE_API_KEY;
+  const BROWSERBASE_PROJECT_ID = process.env.BROWSERBASE_PROJECT_ID;
+
+  if (!BROWSERBASE_API_KEY || !BROWSERBASE_PROJECT_ID) {
+    throw new Error(
+      "BrowserBase credentials not found. Please set BROWSERBASE_API_KEY and BROWSERBASE_PROJECT_ID in your .env file."
+    );
+  }
+
+  logger.info('[REQ] Connecting to BrowserBase...');
+
+  const browser = await chromium.connectOverCDP(
+    `wss://connect.browserbase.com?apiKey=${BROWSERBASE_API_KEY}&projectId=${BROWSERBASE_PROJECT_ID}`
+  );
+
+  logger.info('[REQ] Connected to BrowserBase successfully');
+
+  const context = browser.contexts()[0];
+  const page = context.pages()[0] || await context.newPage();
 
   try {
-    await scraper.initialize();
-
-    // Step 1: Search for companies
-    const companies = await scraper.searchCompanies();
-
-    if (companies.length === 0) {
-      throw new Error('No companies found for search query');
-    }
-
-    // Step 2: Save companies to database
-    const client = supabaseManager.getServiceClient('prod'); // Use appropriate environment
-    if (!client) {
-      throw new Error('No Supabase client available');
-    }
-
-    const { data: savedCompanies, error: saveError } = await client
-      .from('req_companies')
-      .insert(companies)
-      .select();
-
-    if (saveError) {
-      throw new Error(`Failed to save companies: ${saveError.message}`);
-    }
+    await navigateToSearch(page, sessionDataDir);
+    await searchCompany(page, session.initial_search_query, sessionDataDir);
+    const results = await processAllResults(page, session.initial_search_query, sessionDataDir, session.id, session._environment);
 
     logger.info({
       sessionId: session.id,
-      companiesCount: savedCompanies?.length || 0
-    }, 'Saved companies to database');
+      resultsCount: results.length,
+    }, '[REQ] Scraping completed successfully');
 
-    // Step 3: If only one company found, automatically scrape details
-    if (savedCompanies && savedCompanies.length === 1) {
-      const company = savedCompanies[0];
-      const details = await scraper.scrapeCompanyDetails(company);
+    // Mark REQ scraping as completed
+    const client = supabaseManager.getServiceClient(session._environment);
+    if (client) {
+      logger.info('[REQ] Marking session as REQ completed...');
+      const { error: completedError } = await client
+        .from("search_sessions")
+        .update({ req_completed: true })
+        .eq("id", session.id);
 
-      // Save details to database
-      const { error: detailsError } = await client
-        .from('req_company_details')
-        .insert({
-          ...details,
-          req_company_id: company.id,
-        });
-
-      if (detailsError) {
-        throw new Error(`Failed to save company details: ${detailsError.message}`);
+      if (completedError) {
+        logger.error({ error: completedError }, '[REQ] Error marking session as completed');
+      } else {
+        logger.info('[REQ] Session marked as REQ completed successfully');
       }
-
-      logger.info({
-        sessionId: session.id,
-        companyId: company.id
-      }, 'Saved company details to database');
     }
 
-    logger.info({ sessionId: session.id }, '✅ REQ scraping completed successfully');
-
   } catch (error) {
-    logger.error({ error, sessionId: session.id }, '❌ REQ scraping failed');
+    logger.error({ error, sessionId: session.id }, '[REQ] Error during scraping');
+    await debugScreenshot(page, "ERROR", sessionDataDir);
+
+    // Update session status to failed
+    const client = supabaseManager.getServiceClient(session._environment);
+    if (client) {
+      await client
+        .from("search_sessions")
+        .update({
+          status: "failed",
+          error_message: error instanceof Error ? error.message : String(error),
+        })
+        .eq("id", session.id);
+    }
+
     throw error;
   } finally {
-    await scraper.close();
+    await browser.close();
+    logger.info('[REQ] BrowserBase session closed');
   }
 }
-
