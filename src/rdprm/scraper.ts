@@ -50,10 +50,8 @@ async function login(page: Page, dataDir: string) {
 
   logger.info('[RDPRM] Navigating to homepage...');
   await page.goto("https://www.rdprm.gouv.qc.ca/fr/Pages/Accueil.html", {
-    waitUntil: "domcontentloaded",
-    timeout: 60000,
+    waitUntil: "networkidle",
   });
-  await page.waitForTimeout(2000); // Wait for any dynamic content
   await debugScreenshot(page, "01_homepage", dataDir);
 
   // Handle cookie banner if present
@@ -103,8 +101,7 @@ async function login(page: Page, dataDir: string) {
   await debugScreenshot(page, "04_after_login_click", dataDir);
 
   logger.info('[RDPRM] Waiting for page after login...');
-  await page.waitForLoadState("domcontentloaded", { timeout: 60000 });
-  await page.waitForTimeout(2000); // Wait for dynamic content
+  await page.waitForLoadState("networkidle", { timeout: 60000 });
   await debugScreenshot(page, "05_after_login", dataDir);
 
   // Security question - "Confirmer votre identité" - happens AFTER login
@@ -127,8 +124,7 @@ async function login(page: Page, dataDir: string) {
     // Click "Poursuivre" button
     logger.info('[RDPRM] Clicking "Poursuivre" button...');
     await page.getByRole("button", { name: /Poursuivre/i }).click();
-    await page.waitForLoadState("domcontentloaded", { timeout: 60000 });
-    await page.waitForTimeout(2000); // Wait for dynamic content
+    await page.waitForLoadState("networkidle");
     await debugScreenshot(page, "06c_after_security_answer", dataDir);
     logger.info('[RDPRM] Security question answered!');
   } else {
@@ -144,8 +140,7 @@ async function goToConsultation(page: Page, dataDir: string) {
   await debugScreenshot(page, "08_before_consultation_click", dataDir);
 
   // Wait for page to be ready
-  await page.waitForLoadState("domcontentloaded", { timeout: 60000 });
-  await page.waitForTimeout(2000); // Wait for dynamic content
+  await page.waitForLoadState("networkidle");
 
   // Click the link with href="/Consultation/"
   await page.locator('a[href="/Consultation/"]').click();
@@ -197,8 +192,7 @@ async function searchOrganisme(page: Page, company: string, dataDir: string) {
 
   // Wait for results section to load
   logger.info('[RDPRM] Waiting for results to load...');
-  await page.waitForLoadState("domcontentloaded", { timeout: 60000 });
-  await page.waitForTimeout(2000); // Wait for dynamic content
+  await page.waitForLoadState("networkidle");
   await debugScreenshot(page, "13_results_loaded", dataDir);
 }
 
