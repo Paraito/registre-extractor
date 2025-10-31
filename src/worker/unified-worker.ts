@@ -576,15 +576,18 @@ export class UnifiedWorker {
     if (!client) throw new Error(`No client for environment: ${job._environment}`);
 
     try {
+      // Get bucket name and filename using legacy format (before extraction for logging)
+      const { bucketName, fileName } = this.getStorageInfo(job);
+      const supabasePath = `${bucketName}/${fileName}`;
+
       const extractionConfig = convertToExtractionConfig(job);
+      extractionConfig.supabase_path = supabasePath;
+
       await this.extractor!.navigateToSearch(extractionConfig.document_type);
       const localFilePath = await this.extractor!.extractDocument(extractionConfig);
 
       // Upload to Supabase with proper bucket and filename format (legacy format for OCR compatibility)
       const fileBuffer = await fs.readFile(localFilePath);
-
-      // Get bucket name and filename using legacy format
-      const { bucketName, fileName } = this.getStorageInfo(job);
 
       logger.info({
         jobId: job.id.substring(0, 8),

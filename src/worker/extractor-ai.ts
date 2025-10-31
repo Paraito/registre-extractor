@@ -2301,13 +2301,13 @@ export class AIRegistreExtractor {
     const download = await result.downloadPromise;
     const fileName = `${config.document_type}_${config.lot_number || config.numero_inscription || 'doc'}_${Date.now()}.pdf`;
     const savedPath = path.join(this.downloadPath, fileName.replace(/\s+/g, '_'));
-    
+
     await download.saveAs(savedPath);
-    
-    logger.info({ 
-      workerId: this.workerId, 
+
+    logger.info({
+      workerId: this.workerId,
       documentType: config.document_type,
-      savedPath 
+      supabasePath: config.supabase_path || savedPath
     }, 'Document extracted successfully');
 
     // Navigate back to search form for next extraction

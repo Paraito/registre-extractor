@@ -111,6 +111,8 @@ export interface ExtractionConfig {
   // Actes specific fields
   type_document?: string;
   numero_inscription?: string;
+  // Supabase storage path for logging (format: bucket/filename.pdf)
+  supabase_path?: string;
 }
 
 // New interface for extraction config using queue field names
