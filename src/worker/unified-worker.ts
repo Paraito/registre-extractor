@@ -620,7 +620,7 @@ export class UnifiedWorker {
         fileName,
         bucketName,
         environment: job._environment,
-        supabasePath: fileName
+        supabasePath: supabasePath
       }, 'PDF uploaded successfully');
 
       // Determine final status based on document source
@@ -642,7 +642,7 @@ export class UnifiedWorker {
         .from('extraction_queue')
         .update({
           status_id: finalStatus,
-          supabase_path: fileName,
+          supabase_path: supabasePath,
         })
         .eq('id', job.id)
         .select();
