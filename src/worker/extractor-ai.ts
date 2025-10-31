@@ -339,49 +339,52 @@ export class AIRegistreExtractor {
         timeout: 30000,
       });
 
-      // Wrap page after navigation
-      await this.wrapPage();
-
-      // Use natural language to find the entry button
-      logger.info('Looking for site entry with AI');
-      
-      const entryQuery = `{
-        entryButton(description: "Button or link to enter the site, might say 'Entrée du site' or 'Consultez le Registre foncier'")
-      }`;
+      // Try direct selector first (faster and more reliable)
+      logger.info('Looking for site entry button');
 
       try {
-        const { entryButton } = await this.queryWithAI(entryQuery, 'entry-button');
-        
-        if (entryButton) {
-          await entryButton.click();
-          logger.info('Clicked entry button using AI');
-          await this.page.waitForLoadState('networkidle');
-        } else {
-          throw new Error('Entry button not found by AI');
+        // Try known direct selectors first
+        const entrySelectors = [
+          'a[href*="pf_14_06_01_reglr"]',  // Direct link to rules/login page
+          'area[href*="pf_14_06_01_reglr"]',  // Image map area
+          'img[alt*="Registre foncier"]',  // Clickable image
+        ];
+
+        let entryClicked = false;
+        for (const selector of entrySelectors) {
+          const element = await this.page.$(selector);
+          if (element) {
+            await element.click();
+            logger.info({ selector }, 'Clicked entry button using direct selector');
+            entryClicked = true;
+            break;
+          }
         }
-      } catch (error) {
-        logger.error({ error }, 'Failed to find entry button with AI');
-        
-        // Take screenshot and try alternative approach
-        await this.takeDebugScreenshot('entry-page-ai-fail');
-        
-        // Try with more descriptive query
-        const alternativeQuery = `{
-          anyEntryLink(description: "Any clickable element that would let me enter or access the main site")
-          registryImage(description: "Image that says something about 'Registre foncier' or registry")
-        }`;
-        
-        const altResult = await this.queryWithAI(alternativeQuery, 'alternative-entry');
-        
-        if (altResult.anyEntryLink) {
-          await altResult.anyEntryLink.click();
-        } else if (altResult.registryImage) {
-          await altResult.registryImage.click();
-        } else {
-          throw new Error('Could not find any way to enter the site');
+
+        if (!entryClicked) {
+          // Fallback to AI if direct selectors fail
+          logger.info('Direct selectors failed, trying AI');
+          await this.wrapPage();
+
+          const entryQuery = `{
+            entryButton(description: "Button or link to enter the site, might say 'Entrée du site' or 'Consultez le Registre foncier'")
+          }`;
+
+          const { entryButton } = await this.queryWithAI(entryQuery, 'entry-button');
+
+          if (entryButton) {
+            await entryButton.click();
+            logger.info('Clicked entry button using AI');
+          } else {
+            throw new Error('Entry button not found');
+          }
         }
-        
+
         await this.page.waitForLoadState('networkidle');
+      } catch (error) {
+        logger.error({ error }, 'Failed to find entry button');
+        await this.takeDebugScreenshot('entry-page-fail');
+        throw error;
       }
 
       // Now find and fill login form using AI

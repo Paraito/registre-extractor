@@ -1,37 +1,54 @@
-# Registre Extractor - Quebec Land Registry Document Extraction Service
+# Registre Extractor - Quebec Document Extraction Service
 
-A robust, AI-powered document extraction service for the Quebec Land Registry (Registre foncier du Québec) that handles concurrent extractions using AgentQL for adaptive web scraping.
+A robust, AI-powered document extraction service for Quebec government registries that handles concurrent extractions using AgentQL for adaptive web scraping.
 
-## Features
+## 🎯 What It Does
+
+Extracts documents from three Quebec government registries:
+
+1. **Land Registry** (Registre foncier) - Property deeds, cadastral plans, property index
+2. **Business Registry** (REQ) - Company information and officer details
+3. **Personal & Movable Rights** (RDPRM) - Personal and movable real rights documents
+
+## ✨ Features
 
 - 🤖 **AI-Powered Scraping**: Uses AgentQL to adapt to website changes automatically
-- ⚡ **Concurrent Processing**: Supports 20 simultaneous extractions
+- ⚡ **Concurrent Processing**: 9 extraction workers + 5 OCR workers
 - 🔄 **Automatic Retry**: Built-in retry logic with exponential backoff
-- 📊 **Real-time Monitoring**: Web dashboard for system health and job tracking
+- 📊 **Real-time Monitoring**: Health monitoring and job tracking
 - 🗄️ **Supabase Storage**: Secure document storage and metadata management
+- 🔍 **OCR Processing**: Gemini/Claude-powered document analysis
+- 🌍 **Multi-Environment**: Supports prod/staging/dev environments
 
-## Architecture
+## 🏗️ Architecture
 
 ```
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│     Client      │────▶│   REST API      │────▶│  Redis Queue    │
-└─────────────────┘     └─────────────────┘     └─────────────────┘
-                                                          │
-                                                          ▼
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│    Supabase     │◀────│  Worker Pool    │◀────│   20 Workers    │
-│  Storage & DB   │     │                 │     │   (AgentQL)     │
-└─────────────────┘     └─────────────────┘     └─────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                     Unified Worker (PM2)                      │
+│  ┌─────────────┐  ┌─────────────┐  ┌──────────────────┐    │
+│  │   Land      │  │     REQ     │  │      RDPRM       │    │
+│  │  Registry   │  │   Scraper   │  │    Scraper       │    │
+│  │ Extraction  │  │             │  │                  │    │
+│  └─────────────┘  └─────────────┘  └──────────────────┘    │
+│         ↓                 ↓                  ↓               │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │           Supabase (Multi-Environment)                │  │
+│  │   • extraction_queue                                  │  │
+│  │   • search_sessions                                   │  │
+│  │   • req_companies                                     │  │
+│  │   • rdprm_searches                                    │  │
+│  └──────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-## Quick Start
+## 🚀 Quick Start
 
 ### Prerequisites
 
-- Docker and Docker Compose
-- Node.js 20+ (for local development)
-- Redis (included in Docker Compose)
-- Supabase account with configured database
+- **Node.js** 20+ (LTS recommended)
+- **PM2** (process manager)
+- **Supabase** account with configured database
+- **API Keys**: BrowserBase, AgentQL, Gemini (optional)
 
 ### Installation
 
@@ -41,28 +58,35 @@ git clone https://github.com/your-org/registre-extractor.git
 cd registre-extractor
 ```
 
-2. Copy environment variables:
-```bash
-cp .env.example .env
-```
-
-3. Configure your `.env` file with your Supabase credentials and worker accounts.
-
-4. Install dependencies:
+2. Install dependencies:
 ```bash
 npm install
 ```
 
-5. Set up database tables:
+3. Copy environment variables:
 ```bash
-# Run the migration in your Supabase dashboard
-# File: supabase/migrations/001_create_extraction_tables.sql
+cp .env.example .env
 ```
 
-6. Build the project:
+4. Configure your `.env` file with your credentials (see `DEPLOYMENT.md` for details)
+
+5. Build the project:
 ```bash
 npm run build
 ```
+
+6. Start services with PM2:
+```bash
+pm2 start ecosystem.config.js
+pm2 save
+```
+
+### Deployment
+
+For production deployment, see:
+- **Quick Start**: `DEPLOYMENT.md` (root directory)
+- **Detailed Guide**: `docs/DEPLOYMENT.md`
+- **Checklist**: `PRODUCTION_CHECKLIST.md`
 
 ## Usage
 

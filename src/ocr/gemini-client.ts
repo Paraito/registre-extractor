@@ -35,7 +35,8 @@ export class GeminiClient {
       model: modelName,
       generationConfig: {
         maxOutputTokens: 65536,
-        stopSequences: ["Ne t'arrête pas avant d'avoir procéder TOUT les pages et TOUT les inscriptions du document"],
+        // Note: stopSequences removed - Gemini 2.0 has a limit of 17 stop sequences
+        // and the instruction is better placed in the prompt itself
       },
     });
 

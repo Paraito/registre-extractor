@@ -1,238 +1,198 @@
 #!/bin/bash
 
-# Registre Extractor Deployment Verification Script
-# This script verifies that the deployment is working correctly
+# ============================================================================
+# Pre-Deployment Verification Script
+# ============================================================================
+# Run this script before deploying to verify everything is ready
+# Usage: ./verify-deployment.sh
+# ============================================================================
 
-set -e
-
-echo "=========================================="
-echo "🔍 Registre Extractor Deployment Verification"
-echo "=========================================="
-echo ""
+set +e  # Don't exit on error, we want to show all issues
 
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Detect deployment type
-DEPLOYMENT_TYPE=""
-if command -v docker &> /dev/null && docker compose ps &> /dev/null; then
-    DEPLOYMENT_TYPE="docker"
-    echo "✅ Detected Docker deployment"
-elif command -v pm2 &> /dev/null && pm2 list &> /dev/null; then
-    DEPLOYMENT_TYPE="pm2"
-    echo "✅ Detected PM2 deployment"
+ERRORS=0
+WARNINGS=0
+
+echo -e "${BLUE}============================================================================${NC}"
+echo -e "${BLUE}  Pre-Deployment Verification${NC}"
+echo -e "${BLUE}============================================================================${NC}"
+echo ""
+
+# Check 1: Node.js version
+echo -e "${YELLOW}[1/10] Checking Node.js version...${NC}"
+NODE_VERSION=$(node -v 2>/dev/null)
+if [ $? -eq 0 ]; then
+    MAJOR_VERSION=$(echo $NODE_VERSION | cut -d'v' -f2 | cut -d'.' -f1)
+    if [ "$MAJOR_VERSION" -ge 20 ]; then
+        echo -e "${GREEN}✓ Node.js $NODE_VERSION (OK)${NC}"
+    else
+        echo -e "${RED}✗ Node.js $NODE_VERSION (Need v20+)${NC}"
+        ERRORS=$((ERRORS + 1))
+    fi
 else
-    echo -e "${RED}❌ Could not detect deployment type${NC}"
-    echo "Please ensure either Docker or PM2 is running"
+    echo -e "${RED}✗ Node.js not found${NC}"
+    ERRORS=$((ERRORS + 1))
+fi
+echo ""
+
+# Check 2: TypeScript compilation
+echo -e "${YELLOW}[2/10] Checking TypeScript compilation...${NC}"
+npm run typecheck > /dev/null 2>&1
+if [ $? -eq 0 ]; then
+    echo -e "${GREEN}✓ TypeScript compiles without errors${NC}"
+else
+    echo -e "${RED}✗ TypeScript compilation failed${NC}"
+    echo -e "${RED}   Run: npm run typecheck${NC}"
+    ERRORS=$((ERRORS + 1))
+fi
+echo ""
+
+# Check 3: Build
+echo -e "${YELLOW}[3/10] Checking build...${NC}"
+if [ -f "dist/worker/unified-worker.js" ] && \
+   [ -f "dist/req/scraper.js" ] && \
+   [ -f "dist/rdprm/scraper.js" ]; then
+    echo -e "${GREEN}✓ All required dist files exist${NC}"
+else
+    echo -e "${RED}✗ Missing dist files${NC}"
+    echo -e "${RED}   Run: npm run build${NC}"
+    ERRORS=$((ERRORS + 1))
+fi
+echo ""
+
+# Check 4: .env.example
+echo -e "${YELLOW}[4/10] Checking .env.example...${NC}"
+if grep -q "BROWSERBASE_API_KEY" .env.example && \
+   grep -q "RDPRM_USER" .env.example; then
+    echo -e "${GREEN}✓ .env.example has REQ/RDPRM config${NC}"
+else
+    echo -e "${RED}✗ .env.example missing REQ/RDPRM config${NC}"
+    ERRORS=$((ERRORS + 1))
+fi
+echo ""
+
+# Check 5: Package.json scripts
+echo -e "${YELLOW}[5/10] Checking package.json scripts...${NC}"
+if grep -q "unified:start" package.json && \
+   grep -q "unified:dev" package.json; then
+    echo -e "${GREEN}✓ Unified worker scripts exist${NC}"
+else
+    echo -e "${RED}✗ Missing unified worker scripts${NC}"
+    ERRORS=$((ERRORS + 1))
+fi
+echo ""
+
+# Check 6: PM2 ecosystem config
+echo -e "${YELLOW}[6/10] Checking PM2 ecosystem config...${NC}"
+if [ -f "ecosystem.config.js" ]; then
+    if grep -q "unified-worker" ecosystem.config.js; then
+        echo -e "${GREEN}✓ PM2 config has unified-worker${NC}"
+    else
+        echo -e "${RED}✗ PM2 config missing unified-worker${NC}"
+        ERRORS=$((ERRORS + 1))
+    fi
+else
+    echo -e "${RED}✗ ecosystem.config.js not found${NC}"
+    ERRORS=$((ERRORS + 1))
+fi
+echo ""
+
+# Check 7: Deploy script
+echo -e "${YELLOW}[7/10] Checking deploy script...${NC}"
+if [ -f "deploy-pm2.sh" ]; then
+    if [ -x "deploy-pm2.sh" ]; then
+        echo -e "${GREEN}✓ deploy-pm2.sh exists and is executable${NC}"
+    else
+        echo -e "${YELLOW}⚠ deploy-pm2.sh not executable${NC}"
+        echo -e "${YELLOW}   Run: chmod +x deploy-pm2.sh${NC}"
+        WARNINGS=$((WARNINGS + 1))
+    fi
+else
+    echo -e "${RED}✗ deploy-pm2.sh not found${NC}"
+    ERRORS=$((ERRORS + 1))
+fi
+echo ""
+
+# Check 8: Documentation
+echo -e "${YELLOW}[8/10] Checking documentation...${NC}"
+DOC_COUNT=0
+if [ -f "DEPLOYMENT.md" ]; then
+    DOC_COUNT=$((DOC_COUNT + 1))
+fi
+if [ -f "QUICK-DEPLOY.md" ]; then
+    DOC_COUNT=$((DOC_COUNT + 1))
+fi
+if [ $DOC_COUNT -eq 2 ]; then
+    echo -e "${GREEN}✓ All deployment docs exist${NC}"
+else
+    echo -e "${YELLOW}⚠ Missing some deployment docs (found $DOC_COUNT/2)${NC}"
+    WARNINGS=$((WARNINGS + 1))
+fi
+echo ""
+
+# Check 9: Git status
+echo -e "${YELLOW}[9/10] Checking git status...${NC}"
+if git rev-parse --git-dir > /dev/null 2>&1; then
+    UNCOMMITTED=$(git status --porcelain | wc -l)
+    if [ $UNCOMMITTED -gt 0 ]; then
+        echo -e "${YELLOW}⚠ You have $UNCOMMITTED uncommitted changes${NC}"
+        echo -e "${YELLOW}   Review with: git status${NC}"
+        WARNINGS=$((WARNINGS + 1))
+    else
+        echo -e "${GREEN}✓ No uncommitted changes${NC}"
+    fi
+else
+    echo -e "${YELLOW}⚠ Not a git repository${NC}"
+    WARNINGS=$((WARNINGS + 1))
+fi
+echo ""
+
+# Check 10: Dependencies
+echo -e "${YELLOW}[10/10] Checking dependencies...${NC}"
+if [ -d "node_modules" ]; then
+    if [ -f "package-lock.json" ]; then
+        echo -e "${GREEN}✓ Dependencies installed${NC}"
+    else
+        echo -e "${YELLOW}⚠ package-lock.json not found${NC}"
+        WARNINGS=$((WARNINGS + 1))
+    fi
+else
+    echo -e "${RED}✗ node_modules not found${NC}"
+    echo -e "${RED}   Run: npm install${NC}"
+    ERRORS=$((ERRORS + 1))
+fi
+echo ""
+
+# Summary
+echo -e "${BLUE}============================================================================${NC}"
+echo -e "${BLUE}  Verification Summary${NC}"
+echo -e "${BLUE}============================================================================${NC}"
+echo ""
+
+if [ $ERRORS -eq 0 ] && [ $WARNINGS -eq 0 ]; then
+    echo -e "${GREEN}✅ All checks passed! Ready to deploy!${NC}"
+    echo ""
+    echo -e "${BLUE}Next steps:${NC}"
+    echo -e "  1. git add ."
+    echo -e "  2. git commit -m \"feat: Add REQ and RDPRM scrapers\""
+    echo -e "  3. git push origin main"
+    echo -e "  4. SSH to server and run: ./deploy-pm2.sh"
+    echo ""
+    exit 0
+elif [ $ERRORS -eq 0 ]; then
+    echo -e "${YELLOW}⚠ $WARNINGS warning(s) found${NC}"
+    echo -e "${YELLOW}You can deploy, but review warnings above${NC}"
+    echo ""
+    exit 0
+else
+    echo -e "${RED}✗ $ERRORS error(s) and $WARNINGS warning(s) found${NC}"
+    echo -e "${RED}Please fix errors before deploying${NC}"
+    echo ""
     exit 1
 fi
-
-echo ""
-echo "=========================================="
-echo "1️⃣  Checking Services Status"
-echo "=========================================="
-
-if [ "$DEPLOYMENT_TYPE" = "docker" ]; then
-    echo "Docker containers:"
-    docker compose ps
-    
-    # Check if all containers are running
-    RUNNING=$(docker compose ps --services --filter "status=running" | wc -l)
-    TOTAL=$(docker compose ps --services | wc -l)
-    
-    if [ "$RUNNING" -eq "$TOTAL" ]; then
-        echo -e "${GREEN}✅ All $TOTAL containers are running${NC}"
-    else
-        echo -e "${YELLOW}⚠️  Only $RUNNING/$TOTAL containers are running${NC}"
-    fi
-else
-    echo "PM2 processes:"
-    pm2 list
-    
-    # Check if all processes are online
-    ONLINE=$(pm2 jlist | jq '[.[] | select(.pm2_env.status == "online")] | length')
-    TOTAL=$(pm2 jlist | jq 'length')
-    
-    if [ "$ONLINE" -eq "$TOTAL" ]; then
-        echo -e "${GREEN}✅ All $TOTAL processes are online${NC}"
-    else
-        echo -e "${YELLOW}⚠️  Only $ONLINE/$TOTAL processes are online${NC}"
-    fi
-fi
-
-echo ""
-echo "=========================================="
-echo "2️⃣  Checking Playwright Installation"
-echo "=========================================="
-
-if [ "$DEPLOYMENT_TYPE" = "docker" ]; then
-    echo "Checking Playwright in worker container..."
-    PLAYWRIGHT_CHECK=$(docker compose exec -T registre-worker-1 npx playwright --version 2>&1 || echo "FAILED")
-    
-    if [[ "$PLAYWRIGHT_CHECK" == *"Version"* ]]; then
-        echo -e "${GREEN}✅ Playwright is installed: $PLAYWRIGHT_CHECK${NC}"
-    else
-        echo -e "${RED}❌ Playwright check failed${NC}"
-        echo "$PLAYWRIGHT_CHECK"
-    fi
-else
-    echo "Checking Playwright installation..."
-    if npx playwright --version &> /dev/null; then
-        VERSION=$(npx playwright --version)
-        echo -e "${GREEN}✅ Playwright is installed: $VERSION${NC}"
-    else
-        echo -e "${RED}❌ Playwright is not installed${NC}"
-        echo "Run: npx playwright install chromium"
-    fi
-fi
-
-echo ""
-echo "=========================================="
-echo "3️⃣  Checking Environment Variables"
-echo "=========================================="
-
-check_env_var() {
-    local var_name=$1
-    local required=$2
-    
-    if [ "$DEPLOYMENT_TYPE" = "docker" ]; then
-        VALUE=$(docker compose exec -T registre-worker-1 printenv "$var_name" 2>/dev/null || echo "")
-    else
-        VALUE=$(printenv "$var_name" || echo "")
-    fi
-    
-    if [ -n "$VALUE" ]; then
-        # Mask the value for security
-        MASKED="${VALUE:0:10}..."
-        echo -e "${GREEN}✅ $var_name is set ($MASKED)${NC}"
-    else
-        if [ "$required" = "true" ]; then
-            echo -e "${RED}❌ $var_name is NOT set (REQUIRED)${NC}"
-        else
-            echo -e "${YELLOW}⚠️  $var_name is NOT set (optional)${NC}"
-        fi
-    fi
-}
-
-echo "Checking required environment variables..."
-check_env_var "AGENTQL_API_KEY" "true"
-check_env_var "OPENAI_API_KEY" "true"
-check_env_var "GEMINI_API_KEY" "true"
-check_env_var "PROD_SUPABASE_URL" "true"
-check_env_var "PROD_SUPABASE_SERVICE_KEY" "true"
-
-echo ""
-echo "Checking optional environment variables..."
-check_env_var "CLAUDE_API_KEY" "false"
-check_env_var "DEV_SUPABASE_URL" "false"
-check_env_var "STAGING_SUPABASE_URL" "false"
-
-echo ""
-echo "=========================================="
-echo "4️⃣  Checking Worker Configuration"
-echo "=========================================="
-
-if [ "$DEPLOYMENT_TYPE" = "docker" ]; then
-    WORKER_COUNT=$(docker compose exec -T registre-worker-1 printenv WORKER_COUNT 2>/dev/null || echo "1")
-    CONTAINER_COUNT=$(docker compose ps --services --filter "name=registre-worker" | wc -l)
-    echo "Worker containers: $CONTAINER_COUNT"
-    echo "Workers per container: $WORKER_COUNT"
-    TOTAL_WORKERS=$((CONTAINER_COUNT * WORKER_COUNT))
-    echo -e "${GREEN}Total workers: $TOTAL_WORKERS${NC}"
-else
-    INSTANCES=$(pm2 jlist | jq '[.[] | select(.name == "registre-worker")] | length')
-    WORKER_COUNT=$(pm2 jlist | jq -r '[.[] | select(.name == "registre-worker")] | .[0].pm2_env.WORKER_COUNT // "1"')
-    echo "PM2 instances: $INSTANCES"
-    echo "Workers per instance: $WORKER_COUNT"
-    TOTAL_WORKERS=$((INSTANCES * WORKER_COUNT))
-    echo -e "${GREEN}Total workers: $TOTAL_WORKERS${NC}"
-fi
-
-if [ "$TOTAL_WORKERS" -ge 3 ]; then
-    echo -e "${GREEN}✅ Good concurrency configuration${NC}"
-else
-    echo -e "${YELLOW}⚠️  Low concurrency (recommended: 3+ workers)${NC}"
-fi
-
-echo ""
-echo "=========================================="
-echo "5️⃣  Checking Recent Logs for Errors"
-echo "=========================================="
-
-echo "Checking for Playwright errors..."
-if [ "$DEPLOYMENT_TYPE" = "docker" ]; then
-    PLAYWRIGHT_ERRORS=$(docker compose logs --tail=100 registre-worker-1 2>&1 | grep -i "playwright\|browser\|chromium" | grep -i "error\|fail" || echo "")
-else
-    PLAYWRIGHT_ERRORS=$(pm2 logs registre-worker --lines 100 --nostream 2>&1 | grep -i "playwright\|browser\|chromium" | grep -i "error\|fail" || echo "")
-fi
-
-if [ -z "$PLAYWRIGHT_ERRORS" ]; then
-    echo -e "${GREEN}✅ No Playwright errors found${NC}"
-else
-    echo -e "${RED}❌ Playwright errors detected:${NC}"
-    echo "$PLAYWRIGHT_ERRORS" | head -5
-fi
-
-echo ""
-echo "Checking for extraction errors..."
-if [ "$DEPLOYMENT_TYPE" = "docker" ]; then
-    EXTRACTION_ERRORS=$(docker compose logs --tail=100 registre-worker-1 2>&1 | grep -i "error" | grep -v "playwright" || echo "")
-else
-    EXTRACTION_ERRORS=$(pm2 logs registre-worker --lines 100 --nostream 2>&1 | grep -i "error" | grep -v "playwright" || echo "")
-fi
-
-if [ -z "$EXTRACTION_ERRORS" ]; then
-    echo -e "${GREEN}✅ No extraction errors found${NC}"
-else
-    echo -e "${YELLOW}⚠️  Some extraction errors detected (may be normal):${NC}"
-    echo "$EXTRACTION_ERRORS" | head -3
-fi
-
-echo ""
-echo "=========================================="
-echo "6️⃣  Checking API Health"
-echo "=========================================="
-
-if curl -s http://localhost:3000/health &> /dev/null; then
-    HEALTH=$(curl -s http://localhost:3000/health)
-    echo -e "${GREEN}✅ API is responding${NC}"
-    echo "Response: $HEALTH"
-else
-    echo -e "${YELLOW}⚠️  API is not responding on port 3000${NC}"
-    echo "This may be normal if API is not deployed"
-fi
-
-echo ""
-echo "=========================================="
-echo "📊 Summary"
-echo "=========================================="
-
-# Count checks
-TOTAL_CHECKS=6
-PASSED=0
-
-# This is a simplified summary - in production you'd track each check
-echo "Deployment Type: $DEPLOYMENT_TYPE"
-echo "Total Workers: $TOTAL_WORKERS"
-echo ""
-
-if [ "$DEPLOYMENT_TYPE" = "docker" ]; then
-    echo "Quick commands:"
-    echo "  View logs:        docker compose logs -f"
-    echo "  Restart workers:  docker compose restart registre-worker-1"
-    echo "  Check status:     docker compose ps"
-else
-    echo "Quick commands:"
-    echo "  View logs:        pm2 logs"
-    echo "  Restart workers:  pm2 restart registre-worker"
-    echo "  Check status:     pm2 list"
-fi
-
-echo ""
-echo "=========================================="
-echo "✅ Verification Complete"
-echo "=========================================="
-

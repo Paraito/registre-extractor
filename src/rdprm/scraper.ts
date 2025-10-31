@@ -254,14 +254,31 @@ async function downloadFicheComplete(
   const start = Date.now();
   let foundPrint = false;
 
+  let printPage: Page | null = null;
+
   while (Date.now() - start < timeoutMs) {
     const printLink = page.locator("a", {
       hasText: "Imprimer la fiche complète",
     });
     if (await printLink.isVisible().catch(() => false)) {
       await debugScreenshot(page, "14_print_link_visible", dataDir);
-      await printLink.click();
-      logger.info('[RDPRM] Clicked "Imprimer la fiche complète"');
+
+      // Click "Imprimer la fiche complète" and capture the new tab that opens
+      logger.info('[RDPRM] Clicking "Imprimer la fiche complète" and waiting for new tab...');
+      try {
+        [printPage] = await Promise.all([
+          page.context().waitForEvent("page", { timeout: 10000 }),
+          printLink.click(),
+        ]);
+        logger.info('[RDPRM] Print modal tab opened');
+        await printPage.waitForLoadState("domcontentloaded", { timeout: 30000 }).catch(() => {});
+        await debugScreenshot(printPage, "14b_print_modal_opened", dataDir);
+      } catch (e) {
+        logger.warn('[RDPRM] No new tab opened, modal might be on same page');
+        // If no new tab, the modal might appear on the same page
+        printPage = null;
+      }
+
       foundPrint = true;
       break;
     }
@@ -279,151 +296,176 @@ async function downloadFicheComplete(
     throw new CompanyNotFoundError();
   }
 
+  // Determine which page to work with (new tab or original page)
+  const workingPage = printPage || page;
+  logger.info({ isNewTab: !!printPage }, '[RDPRM] Working page determined');
+
   // Handle the large print warning modal and click "Imprimer"
+  // Note: This modal may not always appear (e.g., for smaller documents)
   logger.info('[RDPRM] Waiting for large print warning modal...');
-  const warningText = page
+  const warningText = workingPage
     .locator('div[role="dialog"]')
     .getByText(/Avertissement d['']impression volumineuse/);
-  await warningText.waitFor({ timeout: 30000 });
-  await debugScreenshot(page, "15_warning_modal", dataDir);
 
-  // Click the Imprimer button
-  let printed = false;
+  let modalAppeared = false;
   try {
-    await page.getByRole("button", { name: /Imprimer/i }).click();
-    printed = true;
-  } catch {}
-  if (!printed) {
-    const inputImprimer = page.locator('input[value="Imprimer"]');
-    if (await inputImprimer.isVisible().catch(() => false)) {
-      await inputImprimer.click();
+    await warningText.waitFor({ timeout: 30000 });
+    modalAppeared = true;
+    await debugScreenshot(workingPage, "15_warning_modal", dataDir);
+  } catch (e) {
+    logger.info('[RDPRM] Warning modal did not appear within 30s, checking if download link is already available...');
+    // Modal might not appear for smaller documents - continue to check for download link
+  }
+
+  // Click the Imprimer button if modal appeared
+  if (modalAppeared) {
+    let printed = false;
+    try {
+      await workingPage.getByRole("button", { name: /Imprimer/i }).click();
       printed = true;
+    } catch {}
+    if (!printed) {
+      const inputImprimer = workingPage.locator('input[value="Imprimer"]');
+      if (await inputImprimer.isVisible().catch(() => false)) {
+        await inputImprimer.click();
+        printed = true;
+      }
     }
+    if (!printed) {
+      throw new Error("Could not find the Imprimer button in the warning modal");
+    }
+    await debugScreenshot(workingPage, "16_after_imprimer_click", dataDir);
   }
-  if (!printed) {
-    throw new Error("Could not find the Imprimer button in the warning modal");
-  }
-  await debugScreenshot(page, "16_after_imprimer_click", dataDir);
 
   // Wait for preparation to finish and the download link to appear
   logger.info('[RDPRM] Waiting for preparation to finish and download link to appear...');
-  await page
+  await workingPage
     .getByText(/Préparation de l['']impression/)
     .waitFor({ state: "detached", timeout: 120000 })
     .catch(() => {});
 
-  const downloadSelector = page.locator("a", {
+  const downloadSelector = workingPage.locator("a", {
     hasText: /Télécharger la fiche complète|Fiche complète disponible/,
   });
   await downloadSelector.waitFor({ timeout: 180000 });
-  await debugScreenshot(page, "17_download_link_visible", dataDir);
+  await debugScreenshot(workingPage, "17_download_link_visible", dataDir);
 
-  // Click the download link and capture the new tab (PDF)
+  // Click the download link and capture the PDF viewer tab
   logger.info('[RDPRM] Opening PDF in new tab...');
   const [newPage] = await Promise.all([
-    page.context().waitForEvent("page"),
+    workingPage.context().waitForEvent("page", { timeout: 30000 }),
     downloadSelector.click(),
   ]);
-  await newPage.waitForLoadState("domcontentloaded", { timeout: 120000 });
+
+  // Wait for page to load, but don't fail if it times out
+  // The PDF viewer might have resources that never finish loading
+  try {
+    await newPage.waitForLoadState("domcontentloaded", { timeout: 120000 });
+    logger.info('[RDPRM] PDF viewer page loaded');
+  } catch (e) {
+    logger.warn('[RDPRM] PDF viewer page did not reach domcontentloaded, continuing anyway...');
+  }
+
   await debugScreenshot(newPage, "18_pdf_opened", dataDir);
   logger.info({ url: newPage.url() }, '[RDPRM] PDF viewer URL');
 
   let pdfBuffer: Buffer | null = null;
 
   try {
-    // Try Option 1: Click the download button in the PDF viewer
+    // Try Option 1 (MOST RELIABLE): In-page fetch of the viewer URL
+    // This maintains session state and works even if download button is hidden/broken
     try {
-      logger.info('[RDPRM] Attempting to click download button in PDF viewer...');
-
-      await newPage.waitForTimeout(2000);
-      await debugScreenshot(newPage, "18b_before_download_click", dataDir);
-
-      let clicked = false;
-
-      // Strategy 1: Target the viewer-download-controls component
-      const downloadControls = newPage.locator('viewer-download-controls#downloads cr-icon-button#save');
-      if (await downloadControls.isVisible().catch(() => false)) {
-        logger.info('[RDPRM] Found download button via viewer-download-controls');
-        await downloadControls.click();
-        clicked = true;
-      }
-
-      // Strategy 2: Try by iron-icon attribute
-      if (!clicked) {
-        const iconButton = newPage.locator('cr-icon-button[iron-icon="cr:file-download"]');
-        if (await iconButton.isVisible().catch(() => false)) {
-          logger.info('[RDPRM] Found download button via iron-icon attribute');
-          await iconButton.click();
-          clicked = true;
-        }
-      }
-
-      // Strategy 3: Try by aria-label or title
-      if (!clicked) {
-        const ariaButton = newPage.locator('cr-icon-button[aria-label="Download"], cr-icon-button[title="Download"]');
-        if (await ariaButton.isVisible().catch(() => false)) {
-          logger.info('[RDPRM] Found download button via aria-label/title');
-          await ariaButton.click();
-          clicked = true;
-        }
-      }
-
-      // Strategy 4: Try the toolbar end section
-      if (!clicked) {
-        const toolbarButton = newPage.locator('#toolbar #end cr-icon-button').first();
-        if (await toolbarButton.isVisible().catch(() => false)) {
-          logger.info('[RDPRM] Found download button via toolbar end section');
-          await toolbarButton.click();
-          clicked = true;
-        }
-      }
-
-      if (!clicked) {
-        throw new Error("Could not find download button with any selector strategy");
-      }
-
-      logger.info('[RDPRM] Download button clicked, waiting for download...');
-      await debugScreenshot(newPage, "18c_after_download_click", dataDir);
-
-      const downloadPromise = newPage.waitForEvent('download', { timeout: 30000 });
-      const download = await downloadPromise;
-      logger.info({ filename: download.suggestedFilename() }, '[RDPRM] Download started');
-
-      const downloadPath = await download.path();
-      if (downloadPath) {
-        pdfBuffer = await fs.readFile(downloadPath);
-        logger.info({ size: pdfBuffer.length }, '[RDPRM] PDF downloaded via download button');
-
-        // Clean up the temporary download file
-        try {
-          await fs.unlink(downloadPath);
-        } catch {}
-      } else {
-        throw new Error("Download path not available");
-      }
+      const viewerUrl = newPage.url();
+      logger.info({ url: viewerUrl }, '[RDPRM] Attempting in-page viewer fetch (most reliable)');
+      const b64 = await newPage.evaluate(async u => {
+        const r = await fetch(u, { credentials: "include" });
+        if (!r.ok) throw new Error(`viewer fetch failed ${r.status}`);
+        const buf = await r.arrayBuffer();
+        const bytes = new Uint8Array(buf);
+        let bin = "";
+        for (let i = 0; i < bytes.length; i++)
+          bin += String.fromCharCode(bytes[i]);
+        return btoa(bin);
+      }, viewerUrl);
+      pdfBuffer = Buffer.from(b64, "base64");
+      logger.info({ size: pdfBuffer.length }, '[RDPRM] PDF downloaded via in-page viewer fetch');
     } catch (e) {
-      logger.debug({ error: e instanceof Error ? e.message : String(e) }, '[RDPRM] Download button click failed');
+      logger.debug({ error: e instanceof Error ? e.message : String(e) }, '[RDPRM] In-page viewer fetch failed');
     }
 
-    // Try Option 2: In-page fetch of the viewer URL
+    // Try Option 2: Click the download button in the PDF viewer
     if (!pdfBuffer) {
       try {
-        const viewerUrl = newPage.url();
-        logger.info({ url: viewerUrl }, '[RDPRM] Attempting in-page viewer fetch');
-        const b64 = await newPage.evaluate(async u => {
-          const r = await fetch(u, { credentials: "include" });
-          if (!r.ok) throw new Error(`viewer fetch failed ${r.status}`);
-          const buf = await r.arrayBuffer();
-          const bytes = new Uint8Array(buf);
-          let bin = "";
-          for (let i = 0; i < bytes.length; i++)
-            bin += String.fromCharCode(bytes[i]);
-          return btoa(bin);
-        }, viewerUrl);
-        pdfBuffer = Buffer.from(b64, "base64");
-        logger.info({ size: pdfBuffer.length }, '[RDPRM] PDF downloaded via in-page viewer fetch');
+        logger.info('[RDPRM] Attempting to click download button in PDF viewer...');
+
+        await newPage.waitForTimeout(2000);
+        await debugScreenshot(newPage, "18b_before_download_click", dataDir);
+
+        let clicked = false;
+
+        // Strategy 1: Target the viewer-download-controls component
+        const downloadControls = newPage.locator('viewer-download-controls#downloads cr-icon-button#save');
+        if (await downloadControls.isVisible().catch(() => false)) {
+          logger.info('[RDPRM] Found download button via viewer-download-controls');
+          await downloadControls.click();
+          clicked = true;
+        }
+
+        // Strategy 2: Try by iron-icon attribute
+        if (!clicked) {
+          const iconButton = newPage.locator('cr-icon-button[iron-icon="cr:file-download"]');
+          if (await iconButton.isVisible().catch(() => false)) {
+            logger.info('[RDPRM] Found download button via iron-icon attribute');
+            await iconButton.click();
+            clicked = true;
+          }
+        }
+
+        // Strategy 3: Try by aria-label or title
+        if (!clicked) {
+          const ariaButton = newPage.locator('cr-icon-button[aria-label="Download"], cr-icon-button[title="Download"]');
+          if (await ariaButton.isVisible().catch(() => false)) {
+            logger.info('[RDPRM] Found download button via aria-label/title');
+            await ariaButton.click();
+            clicked = true;
+          }
+        }
+
+        // Strategy 4: Try the toolbar end section
+        if (!clicked) {
+          const toolbarButton = newPage.locator('#toolbar #end cr-icon-button').first();
+          if (await toolbarButton.isVisible().catch(() => false)) {
+            logger.info('[RDPRM] Found download button via toolbar end section');
+            await toolbarButton.click();
+            clicked = true;
+          }
+        }
+
+        if (!clicked) {
+          throw new Error("Could not find download button with any selector strategy");
+        }
+
+        logger.info('[RDPRM] Download button clicked, waiting for download...');
+        await debugScreenshot(newPage, "18c_after_download_click", dataDir);
+
+        const downloadPromise = newPage.waitForEvent('download', { timeout: 30000 });
+        const download = await downloadPromise;
+        logger.info({ filename: download.suggestedFilename() }, '[RDPRM] Download started');
+
+        const downloadPath = await download.path();
+        if (downloadPath) {
+          pdfBuffer = await fs.readFile(downloadPath);
+          logger.info({ size: pdfBuffer.length }, '[RDPRM] PDF downloaded via download button');
+
+          // Clean up the temporary download file
+          try {
+            await fs.unlink(downloadPath);
+          } catch {}
+        } else {
+          throw new Error("Download path not available");
+        }
       } catch (e) {
-        logger.debug({ error: e instanceof Error ? e.message : String(e) }, '[RDPRM] In-page viewer fetch failed');
+        logger.debug({ error: e instanceof Error ? e.message : String(e) }, '[RDPRM] Download button click failed');
       }
     }
 
@@ -521,6 +563,10 @@ async function downloadFicheComplete(
   } finally {
     // Close the PDF viewer page
     await newPage.close().catch(() => {});
+    // Close the print modal page if it was opened
+    if (printPage) {
+      await printPage.close().catch(() => {});
+    }
   }
 }
 

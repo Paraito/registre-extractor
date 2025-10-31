@@ -94,11 +94,16 @@ export class UnifiedWorker {
     this.extractor = new RegistreExtractor(
       this.currentAccount,
       this.workerId,
-      config.isProduction
+      config.headless  // Use config.headless instead of config.isProduction
     );
 
     await this.extractor.initialize();
-    logger.info({ workerId: this.workerId }, 'Land registry extractor initialized');
+
+    // Login to the registry
+    logger.info({ workerId: this.workerId }, 'Logging in to land registry');
+    await this.extractor.login();
+
+    logger.info({ workerId: this.workerId }, 'Land registry extractor initialized and logged in');
   }
 
   /**
@@ -340,7 +345,7 @@ export class UnifiedWorker {
       .select('*')
       .eq('status_id', EXTRACTION_STATUS.EN_ATTENTE)
       .order('created_at', { ascending: true })
-      .limit(1);
+      .limit(10); // Get multiple jobs to filter
 
     if (error) {
       logger.error({ error, environment: env }, '❌ Error querying extraction_queue');
@@ -352,7 +357,33 @@ export class UnifiedWorker {
       return null;
     }
 
-    const job = data[0];
+    // Find first job that hasn't exceeded max attempts
+    const job = data.find((j: ExtractionQueueJob) => {
+      const attempts = j.attemtps || 0;
+      const maxAttempts = j.max_attempts || 3;
+      return attempts < maxAttempts;
+    });
+
+    if (!job) {
+      // All jobs have exceeded max attempts - mark them as ERREUR
+      logger.warn({
+        environment: env,
+        jobsFound: data.length
+      }, '⚠️ All available jobs have exceeded max attempts - marking as ERREUR');
+
+      for (const failedJob of data) {
+        await client
+          .from('extraction_queue')
+          .update({
+            status_id: EXTRACTION_STATUS.ERREUR,
+            error_message: 'Max attempts exceeded',
+          })
+          .eq('id', failedJob.id)
+          .eq('status_id', EXTRACTION_STATUS.EN_ATTENTE);
+      }
+
+      return null;
+    }
 
     // Claim the job
     const { data: claimedJob, error: claimError } = await client
@@ -549,35 +580,158 @@ export class UnifiedWorker {
       await this.extractor!.navigateToSearch(extractionConfig.document_type);
       const localFilePath = await this.extractor!.extractDocument(extractionConfig);
 
-      // Upload to Supabase
+      // Upload to Supabase with proper bucket and filename format (legacy format for OCR compatibility)
       const fileBuffer = await fs.readFile(localFilePath);
-      const fileName = `${job.document_source}/${job.document_number}.pdf`;
+
+      // Get bucket name and filename using legacy format
+      const { bucketName, fileName } = this.getStorageInfo(job);
+
+      logger.info({
+        jobId: job.id.substring(0, 8),
+        fileName,
+        fileSize: fileBuffer.length,
+        environment: job._environment,
+        bucket: bucketName
+      }, 'Uploading PDF to Supabase');
 
       const { error: uploadError } = await client.storage
-        .from('documents')
-        .upload(fileName, fileBuffer, { upsert: true });
+        .from(bucketName)
+        .upload(fileName, fileBuffer, {
+          upsert: true,
+          contentType: 'application/pdf'  // Explicitly set MIME type
+        });
 
-      if (uploadError) throw uploadError;
+      if (uploadError) {
+        logger.error({
+          jobId: job.id.substring(0, 8),
+          uploadError,
+          fileName,
+          bucketName,
+          environment: job._environment
+        }, 'Failed to upload to Supabase');
+        throw uploadError;
+      }
+
+      logger.info({
+        jobId: job.id.substring(0, 8),
+        fileName,
+        bucketName,
+        environment: job._environment,
+        supabasePath: fileName
+      }, 'PDF uploaded successfully');
+
+      // Determine final status based on document source
+      // plan_cadastraux doesn't need OCR, so set to EXTRACTION_COMPLETE (5)
+      // index and acte need OCR, so set to COMPLETE (3)
+      const finalStatus = job.document_source === 'plan_cadastraux'
+        ? EXTRACTION_STATUS.EXTRACTION_COMPLETE
+        : EXTRACTION_STATUS.COMPLETE;
+
+      logger.info({
+        jobId: job.id.substring(0, 8),
+        documentSource: job.document_source,
+        finalStatus,
+        needsOCR: job.document_source !== 'plan_cadastraux'
+      }, 'Setting final status');
 
       // Update job status
-      await client
+      const { data: updateData, error: updateError } = await client
         .from('extraction_queue')
         .update({
-          status_id: EXTRACTION_STATUS.COMPLETE,
+          status_id: finalStatus,
           supabase_path: fileName,
-          completed_at: new Date().toISOString(),
         })
+        .eq('id', job.id)
+        .select();
+
+      if (updateError) {
+        logger.error({
+          jobId: job.id.substring(0, 8),
+          updateError
+        }, 'Failed to update job status');
+        throw updateError;
+      }
+
+      // Verify the update
+      const { data: verifyData, error: verifyError } = await client
+        .from('extraction_queue')
+        .select('id, status_id, supabase_path')
+        .eq('id', job.id)
+        .single();
+
+      if (verifyError) {
+        logger.error({ jobId: job.id.substring(0, 8), verifyError }, 'Failed to verify update');
+      } else {
+        logger.info({
+          jobId: job.id.substring(0, 8),
+          verifiedStatus: verifyData.status_id,
+          verifiedPath: verifyData.supabase_path,
+          expectedStatus: finalStatus,
+          expectedPath: fileName
+        }, 'Update verification');
+      }
+
+      logger.info({
+        jobId: job.id.substring(0, 8),
+        status: finalStatus,
+        supabasePath: fileName,
+        updateResult: updateData,
+        ocrRequired: job.document_source !== 'plan_cadastraux'
+      }, '✅ Extraction job completed');
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      const currentAttempts = (job.attemtps || 0) + 1;
+      const maxAttempts = job.max_attempts || 3;
+      const hasReachedMaxAttempts = currentAttempts >= maxAttempts;
+
+      logger.error({
+        jobId: job.id.substring(0, 8),
+        error: errorMessage,
+        currentAttempts,
+        maxAttempts,
+        hasReachedMaxAttempts,
+        documentSource: job.document_source,
+        documentNumber: job.document_number
+      }, '❌ Extraction job failed');
+
+      // Update job with error info and increment attempts
+      const updatePayload: any = {
+        attemtps: currentAttempts,
+        error_message: errorMessage,
+        worker_id: null, // Release the job
+        processing_started_at: null,
+      };
+
+      // If max attempts reached, mark as ERREUR (4)
+      // Otherwise, reset to EN_ATTENTE (1) for retry
+      if (hasReachedMaxAttempts) {
+        updatePayload.status_id = EXTRACTION_STATUS.ERREUR;
+        logger.error({
+          jobId: job.id.substring(0, 8),
+          attempts: currentAttempts,
+          maxAttempts
+        }, '🚫 Max attempts reached - marking job as ERREUR');
+      } else {
+        updatePayload.status_id = EXTRACTION_STATUS.EN_ATTENTE;
+        logger.warn({
+          jobId: job.id.substring(0, 8),
+          attempts: currentAttempts,
+          maxAttempts,
+          remainingAttempts: maxAttempts - currentAttempts
+        }, '🔄 Resetting job to EN_ATTENTE for retry');
+      }
+
+      const { error: updateError } = await client
+        .from('extraction_queue')
+        .update(updatePayload)
         .eq('id', job.id);
 
-      logger.info({ jobId: job.id.substring(0, 8) }, '✅ Extraction job completed');
-    } catch (error) {
-      await client
-        .from('extraction_queue')
-        .update({
-          status_id: EXTRACTION_STATUS.ERREUR,
-          error_message: error instanceof Error ? error.message : 'Unknown error',
-        })
-        .eq('id', job.id);
+      if (updateError) {
+        logger.error({
+          jobId: job.id.substring(0, 8),
+          updateError
+        }, 'Failed to update job after error - THIS IS CRITICAL');
+      }
 
       throw error;
     }
@@ -693,6 +847,38 @@ export class UnifiedWorker {
     } catch (resetError) {
       logger.error({ resetError, jobId: job.id }, 'Failed to reset job on error');
     }
+  }
+
+  /**
+   * Get storage bucket and filename info (legacy format for OCR compatibility)
+   */
+  private getStorageInfo(job: ExtractionQueueJob): { bucketName: string; fileName: string } {
+    const docNumber = (job.document_number_normalized || job.document_number).replace(/\s+/g, '');
+    // Sanitize special characters for S3/Storage compatibility
+    const circonscription = job.circonscription_fonciere?.replace(/[^a-zA-Z0-9-_]/g, '_') || '';
+    const cadastre = job.cadastre?.replace(/[^a-zA-Z0-9-_]/g, '_') || '';
+    const timestamp = Date.now();
+
+    let bucketName: string;
+    let fileName: string;
+
+    switch (job.document_source) {
+      case 'acte':
+        bucketName = 'actes';
+        fileName = `${docNumber}-${circonscription}-${timestamp}.pdf`;
+        break;
+      case 'plan_cadastraux':
+        bucketName = 'plans-cadastraux';
+        fileName = `${docNumber}-${circonscription}-${cadastre}-${timestamp}.pdf`;
+        break;
+      case 'index':
+      default:
+        bucketName = 'index';
+        fileName = `${docNumber}-${circonscription}-${cadastre}-${timestamp}.pdf`;
+        break;
+    }
+
+    return { bucketName, fileName };
   }
 
   /**
